@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 220 20% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 10%;
+    --primary: 152 69% 31%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 20% 96%;
+    --secondary-foreground: 220 20% 10%;
+    --muted: 210 15% 93%;
+    --muted-foreground: 220 10% 45%;
+    --accent: 199 89% 48%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 15% 85%;
+    --input: 210 15% 85%;
+    --ring: 152 69% 31%;
+    --chart-1: 152 69% 31%;
+    --chart-2: 199 89% 48%;
+    --chart-3: 45 93% 47%;
+    --chart-4: 0 84% 60%;
+    --chart-5: 220 20% 60%;
+    --radius: 0.625rem;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 220 20% 10%;
+    --sidebar-primary: 152 69% 31%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 20% 96%;
+    --sidebar-accent-foreground: 220 20% 10%;
+    --sidebar-border: 210 15% 85%;
+    --sidebar-ring: 152 69% 31%;
+    
+    /* Custom colors for risk levels */
+    --risk-high: 0 84% 60%;
+    --risk-medium: 45 93% 47%;
+    --risk-low: 152 69% 40%;
+    
+    /* Status colors */
+    --status-pending: 45 93% 47%;
+    --status-success: 152 69% 40%;
+    --status-info: 199 89% 48%;
+  }
+  .dark {
+    --background: 220 20% 8%;
+    --foreground: 210 20% 98%;
+    --card: 220 18% 12%;
+    --card-foreground: 210 20% 98%;
+    --popover: 220 18% 12%;
+    --popover-foreground: 210 20% 98%;
+    --primary: 152 69% 40%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 15% 18%;
+    --secondary-foreground: 210 20% 98%;
+    --muted: 220 15% 18%;
+    --muted-foreground: 220 10% 55%;
+    --accent: 199 89% 48%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 15% 20%;
+    --input: 220 15% 20%;
+    --ring: 152 69% 40%;
+    --chart-1: 152 69% 40%;
+    --chart-2: 199 89% 48%;
+    --chart-3: 45 93% 47%;
+    --chart-4: 0 84% 60%;
+    --chart-5: 220 20% 60%;
+    --sidebar-background: 220 18% 10%;
+    --sidebar-foreground: 210 20% 98%;
+    --sidebar-primary: 152 69% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 15% 18%;
+    --sidebar-accent-foreground: 210 20% 98%;
+    --sidebar-border: 220 15% 20%;
+    --sidebar-ring: 152 69% 40%;
+    
+    /* Custom colors for risk levels */
+    --risk-high: 0 72% 51%;
+    --risk-medium: 45 93% 47%;
+    --risk-low: 152 69% 40%;
+    
+    /* Status colors */
+    --status-pending: 45 93% 47%;
+    --status-success: 152 69% 40%;
+    --status-info: 199 89% 48%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
