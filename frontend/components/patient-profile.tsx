@@ -25,9 +25,10 @@ import type { Patient, RiskLevel } from "@/lib/mockData"
 interface PatientProfileProps {
   patient: Patient
   onBack: () => void
+  onUpdatePatient: (patient: Patient) => void
 }
 
-export function PatientProfile({ patient, onBack }: PatientProfileProps) {
+export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProfileProps) {
   const { t, language } = useLanguage()
   const [scheduledDate, setScheduledDate] = useState(patient.scheduledTestDate || "")
   const [showDatePicker, setShowDatePicker] = useState(false)
@@ -128,6 +129,12 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
 
   const handleScheduleTest = () => {
     if (scheduledDate) {
+      const updatedPatient: Patient = {
+        ...patient,
+        scheduledTestDate: scheduledDate,
+        testScheduled: true,
+      }
+      onUpdatePatient(updatedPatient)
       alert(`${t.testScheduled}: ${scheduledDate}`)
       setShowDatePicker(false)
     }

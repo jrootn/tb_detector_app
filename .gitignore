@@ -1,0 +1,28 @@
+# Node / Next
+node_modules/
+.next/
+out/
+dist/
+build/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# OS / Editor
+.DS_Store
+.vscode/
+
+# Logs
+*.log

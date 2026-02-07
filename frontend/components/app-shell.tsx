@@ -8,6 +8,7 @@ import { ScreeningFlow } from "./screening-flow"
 import { PatientProfile } from "./patient-profile"
 import { PriorityView } from "./priority-view"
 import { mockPatients, type Patient } from "@/lib/mockData"
+import { getAllPatients, savePatients, seedPatientsIfEmpty } from "@/lib/db"
 
 type Screen = "login" | "dashboard" | "screening" | "profile" | "priority"
 
@@ -23,6 +24,7 @@ export function AppShell() {
   const [ashaId, setAshaId] = useState("")
   const [patients, setPatients] = useState<Patient[]>(mockPatients)
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
+  const [dbReady, setDbReady] = useState(false)
   const [gpsLocation, setGpsLocation] = useState<GPSLocation>({
     latitude: null,
     longitude: null,
@@ -86,6 +88,37 @@ export function AppShell() {
     }
   }, [])
 
+  // Load patients from IndexedDB (seed with mock data once)
+  useEffect(() => {
+    let isMounted = true
+    const loadPatients = async () => {
+      try {
+        await seedPatientsIfEmpty(mockPatients)
+        const stored = await getAllPatients()
+        if (isMounted && stored.length > 0) {
+          setPatients(stored)
+        }
+      } catch (error) {
+        console.error("Failed to load patients from IndexedDB", error)
+      } finally {
+        if (isMounted) setDbReady(true)
+      }
+    }
+
+    loadPatients()
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  // Persist patient changes to IndexedDB
+  useEffect(() => {
+    if (!dbReady) return
+    savePatients(patients).catch((error) => {
+      console.error("Failed to save patients to IndexedDB", error)
+    })
+  }, [patients, dbReady])
+
   const handleLogin = useCallback((id: string) => {
     setAshaId(id)
     setCurrentScreen("dashboard")
@@ -103,6 +136,11 @@ export function AppShell() {
   const handleViewPatient = useCallback((patient: Patient) => {
     setSelectedPatient(patient)
     setCurrentScreen("profile")
+  }, [])
+
+  const handleUpdatePatient = useCallback((updated: Patient) => {
+    setPatients((prev) => prev.map((patient) => (patient.id === updated.id ? updated : patient)))
+    setSelectedPatient(updated)
   }, [])
 
   const handleScreeningComplete = useCallback((newPatient: Patient) => {
@@ -142,6 +180,7 @@ export function AppShell() {
           <PatientProfile
             patient={selectedPatient}
             onBack={() => setCurrentScreen("dashboard")}
+            onUpdatePatient={handleUpdatePatient}
           />
         )}
 
