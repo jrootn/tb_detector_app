@@ -11,3 +11,6 @@ __pycache__/
 
 # Logs
 *.log
+
+# Firebase service account key
+serviceAccountKey.json

@@ -10,6 +10,9 @@ build/
 .env.*
 !.env.example
 
+# Firebase service account key
+serviceAccountKey.json
+
 # Python
 __pycache__/
 *.py[cod]
