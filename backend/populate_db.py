@@ -1,11 +1,13 @@
+import math
 import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
-from firebase_admin import credentials, firestore, initialize_app
+import firebase_admin
+from firebase_admin import auth, credentials, firestore, initialize_app
 
 
 def _utc_now() -> str:
@@ -31,17 +33,40 @@ else:
 db = firestore.client()
 
 
-NAMES = [
-    "Ramesh Kumar",
-    "Sunita Devi",
-    "Mohan Lal",
-    "Lakshmi Prasad",
-    "Rajesh Singh",
-    "Geeta Kumari",
-    "Vijay Yadav",
-    "Priya Sharma",
-    "Arjun Thakur",
-    "Meera Gupta",
+FIRST_NAMES = [
+    "Ramesh",
+    "Sunita",
+    "Mohan",
+    "Lakshmi",
+    "Rajesh",
+    "Geeta",
+    "Vijay",
+    "Priya",
+    "Arjun",
+    "Meera",
+    "Anita",
+    "Sita",
+    "Amit",
+    "Pooja",
+    "Sanjay",
+    "Kiran",
+    "Deepak",
+    "Neha",
+]
+
+LAST_NAMES = [
+    "Kumar",
+    "Devi",
+    "Lal",
+    "Prasad",
+    "Singh",
+    "Verma",
+    "Yadav",
+    "Sharma",
+    "Thakur",
+    "Gupta",
+    "Rao",
+    "Mishra",
 ]
 
 VILLAGES = [
@@ -55,30 +80,155 @@ VILLAGES = [
     "Begusarai",
     "Bhagalpur",
     "Patna",
+    "Kamptee",
+    "Kalmeshwar",
+    "Hingna",
+    "Bhandara",
 ]
 
 SYMPTOMS = ["COUGH", "FEVER_HIGH", "NIGHT_SWEATS", "WEIGHT_LOSS", "CHEST_PAIN"]
 RISK_FACTORS = ["HISTORY_TB", "FAMILY_TB", "SMOKER", "DIABETES", "HIV"]
 PHYSICAL_SIGNS = ["CHEST_PAIN", "SHORTNESS_OF_BREATH", "LOSS_OF_APPETITE", "EXTREME_FATIGUE"]
 
-BIHAR_COORDS = [
-    (25.5941, 85.1376),  # Patna
-    (26.1542, 85.8918),  # Darbhanga
-    (26.1197, 85.3910),  # Muzaffarpur
-    (26.1009, 87.9500),  # Kishanganj
-    (25.4182, 86.1272),  # Begusarai
-    (26.5952, 85.4810),  # Sitamarhi
-    (26.3508, 86.0712),  # Madhubani
-    (25.6093, 85.1376),  # Patna South
-    (25.2425, 86.9842),  # Bhagalpur
-    (26.8467, 80.9462),  # Lucknow (UP border ref)
-]
+# Central India (Nagpur) cluster for realistic maps
+CENTER_LAT = 21.1458
+CENTER_LNG = 79.0882
+RADIUS_KM = 5.0
 
 ANSWER_CHOICES = ["yes", "no", "dontKnow", "preferNotToSay"]
 
+TRIAGE_STATUSES = [
+    "AWAITING_DOCTOR",
+    "TEST_PENDING",
+    "ASSIGNED_TO_LAB",
+    "LAB_DONE",
+    "UNDER_TREATMENT",
+    "CLEARED",
+]
 
-def build_patient(idx: int) -> Dict:
-    name = random.choice(NAMES)
+# Profiles for Auth + Firestore users
+DOCTOR_PROFILES = [
+    {"name": "Dr. Priya Sharma", "email_prefix": "priya"},
+    {"name": "Dr. Amit Verma", "email_prefix": "amit"},
+]
+
+ASHA_PROFILES = [
+    {"name": "Sita Devi", "email_prefix": "sita"},
+    {"name": "Anita Kumari", "email_prefix": "anita"},
+    {"name": "Geeta Verma", "email_prefix": "geeta"},
+    {"name": "Sunita Rao", "email_prefix": "sunita"},
+]
+
+LAB_PROFILES = [
+    {"name": "Central Diagnostics", "email_prefix": "lab.central", "offset": (0.01, 0.01)},
+    {"name": "Rural Pathology Unit", "email_prefix": "lab.rural", "offset": (-0.02, -0.01)},
+]
+
+
+def generate_nearby_coords(lat: float, lng: float, radius_km: float) -> Dict[str, float]:
+    r = radius_km / 111.0
+    u = random.random()
+    v = random.random()
+    w = r * math.sqrt(u)
+    t = 2 * math.pi * v
+    x = w * math.cos(t)
+    y = w * math.sin(t)
+    return {"lat": lat + x, "lng": lng + (y / math.cos(math.radians(lat)))}
+
+
+def create_user_entry(
+    profile: Dict[str, str],
+    role: str,
+    email: str,
+    password: str,
+    location: Dict[str, float],
+) -> Tuple[str, Dict]:
+    try:
+        try:
+            user = auth.create_user(email=email, password=password)
+            uid = user.uid
+        except auth.EmailAlreadyExistsError:
+            user = auth.get_user_by_email(email)
+            uid = user.uid
+
+        user_data = {
+            "name": profile["name"],
+            "email": email,
+            "role": role,
+            "assigned_center": "PHC_Nagpur_01",
+            "phone": f"+9198{random.randint(10000000, 99999999)}",
+            "location": {"latitude": location["lat"], "longitude": location["lng"]},
+        }
+
+        if role == "ASHA":
+            user_data["active_patients"] = random.randint(2, 12)
+        elif role == "LAB_TECH":
+            user_data["capacity_per_day"] = 50
+
+        db.collection("users").document(uid).set(user_data)
+        return uid, user_data
+    except Exception as e:
+        print(f"Error creating {profile['name']}: {e}")
+        raise
+
+
+def calculate_risk_score(symptoms: List[Dict], risk_factors: List[str]) -> float:
+    score = 0.0
+    for s in symptoms:
+        code = s.get("symptom_code")
+        duration = s.get("duration_days", 0) or 0
+        severity = s.get("severity")
+        if code == "COUGH":
+            score += 1.5
+            if duration >= 21:
+                score += 1.5
+        if code == "FEVER_HIGH":
+            score += 2.0
+        if code == "NIGHT_SWEATS":
+            score += 1.5
+        if code == "WEIGHT_LOSS":
+            score += 1.0
+        if code == "CHEST_PAIN":
+            score += 1.0
+        if severity == "severe":
+            score += 0.5
+
+    if "HISTORY_TB" in risk_factors:
+        score += 1.5
+    if "HIV" in risk_factors:
+        score += 1.5
+    if "DIABETES" in risk_factors:
+        score += 0.5
+    if "SMOKER" in risk_factors:
+        score += 0.3
+
+    return round(min(score, 10.0), 1)
+
+
+def generate_summary(risk_score: float, triage_status: str) -> str:
+    if triage_status == "ASSIGNED_TO_LAB":
+        return "Assigned to lab for confirmatory testing. Prioritize sample processing."
+    if triage_status == "LAB_DONE":
+        return "Lab work completed. Review results and finalize treatment plan."
+    if triage_status == "UNDER_TREATMENT":
+        return "Patient on treatment. Continue monitoring and adherence support."
+    if triage_status == "CLEARED":
+        return "Low concern. Provide routine follow-up and health education."
+    if triage_status == "TEST_PENDING":
+        return "Testing pending. Schedule sputum or X-ray as soon as possible."
+
+    # Default: awaiting doctor
+    if risk_score >= 8:
+        return "High TB suspicion. Urgent evaluation and testing recommended."
+    if risk_score >= 5:
+        return "Moderate TB risk. Expedite diagnostics and follow-up."
+    return "Low TB risk. Monitor symptoms and advise follow-up if worsening."
+
+
+def build_patient(idx: int, asha_users: List[Tuple[str, Dict]], used_sample_ids: set) -> Dict:
+    first = random.choice(FIRST_NAMES)
+    last = random.choice(LAST_NAMES)
+    name = f"{first} {last} {idx + 1}"
     village = random.choice(VILLAGES)
     age = random.randint(18, 70)
     gender = random.choice(["male", "female", "other"])
@@ -94,19 +244,34 @@ def build_patient(idx: int) -> Dict:
             }
         )
 
-    base_lat, base_lng = random.choice(BIHAR_COORDS)
-    lat = round(base_lat + random.uniform(-0.05, 0.05), 4)
-    lng = round(base_lng + random.uniform(-0.05, 0.05), 4)
+    coords = generate_nearby_coords(CENTER_LAT, CENTER_LNG, RADIUS_KM)
+    lat = round(coords["lat"], 4)
+    lng = round(coords["lng"], 4)
 
     risk_factor_answers = {key: random.choice(ANSWER_CHOICES) for key in RISK_FACTORS}
     risk_factors_positive = [key for key, val in risk_factor_answers.items() if val == "yes"]
 
     patient_local_id = f"local-{idx}-{uuid.uuid4().hex[:6]}"
+    sample_id = f"TX-{random.randint(100, 999)}"
+    while sample_id in used_sample_ids:
+        sample_id = f"TX-{random.randint(100, 999)}"
+    used_sample_ids.add(sample_id)
+    asha_uid, asha_profile = random.choice(asha_users)
+
+    triage_status = random.choices(
+        TRIAGE_STATUSES,
+        weights=[30, 20, 15, 10, 10, 15],
+        k=1,
+    )[0]
+    risk_score = calculate_risk_score(symptoms, risk_factors_positive)
 
     patient = {
         "patient_local_id": patient_local_id,
         "device_id": f"device-{random.randint(100,999)}",
-        "asha_worker_id": f"ASHA-{random.randint(100,999)}",
+        "asha_id": asha_uid,
+        "asha_worker_id": asha_uid,
+        "asha_phone_number": asha_profile.get("phone"),
+        "sample_id": sample_id,
         "created_at_offline": _random_date_within(20),
         "synced_at": _utc_now(),
         "demographics": {
@@ -151,14 +316,14 @@ def build_patient(idx: int) -> Dict:
         "ai": {
             "hear_embedding_id": str(uuid.uuid4()),
             "hear_score": round(random.uniform(0.2, 0.95), 2),
-            "medgemini_summary": "Mock summary for testing.",
-            "risk_score": round(random.uniform(2.0, 9.5), 1),
-            "risk_level": random.choice(["LOW", "MEDIUM", "HIGH"]),
+            "medgemini_summary": generate_summary(risk_score, triage_status),
+            "risk_score": risk_score,
+            "risk_level": "HIGH" if risk_score >= 7.0 else "MEDIUM" if risk_score >= 4.0 else "LOW",
         },
+        "doctor_priority": random.random() < 0.1,
+        "doctor_rank": random.randint(-5, 5),
         "status": {
-            "triage_status": random.choice(
-                ["AWAITING_DOCTOR", "TEST_PENDING", "UNDER_TREATMENT", "CLEARED"]
-            ),
+            "triage_status": triage_status,
             "test_scheduled_date": None,
             "doctor_notes": None,
         },
@@ -166,13 +331,62 @@ def build_patient(idx: int) -> Dict:
     return patient
 
 
-def main() -> None:
+def reset_collections() -> None:
+    for collection_name in ["patients", "users"]:
+        docs = db.collection(collection_name).stream()
+        for doc in docs:
+            doc.reference.delete()
+
+
+def delete_auth_users() -> None:
+    emails = []
+    emails.extend([f"{p['email_prefix']}.doctor@indiatb.gov" for p in DOCTOR_PROFILES])
+    emails.extend([f"{p['email_prefix']}.asha@indiatb.gov" for p in ASHA_PROFILES])
+    emails.extend([f"{p['email_prefix']}@indiatb.gov" for p in LAB_PROFILES])
+
+    for email in emails:
+        try:
+            user = auth.get_user_by_email(email)
+            auth.delete_user(user.uid)
+        except auth.UserNotFoundError:
+            continue
+
+
+def setup_database() -> None:
+    print("Starting demo data setup...")
+
+    if os.environ.get("RESET_DB") == "1":
+        reset_collections()
+        delete_auth_users()
+
+    # Create users
+    asha_users: List[Tuple[str, Dict]] = []
+
+    for profile in DOCTOR_PROFILES:
+        email = f"{profile['email_prefix']}.doctor@indiatb.gov"
+        loc = {"lat": CENTER_LAT, "lng": CENTER_LNG}
+        create_user_entry(profile, "DOCTOR", email, "password123", loc)
+
+    for profile in ASHA_PROFILES:
+        email = f"{profile['email_prefix']}.asha@indiatb.gov"
+        loc = generate_nearby_coords(CENTER_LAT, CENTER_LNG, RADIUS_KM)
+        uid, user_data = create_user_entry(profile, "ASHA", email, "password123", loc)
+        asha_users.append((uid, user_data))
+
+    for profile in LAB_PROFILES:
+        email = f"{profile['email_prefix']}@indiatb.gov"
+        loc = {"lat": CENTER_LAT + profile["offset"][0], "lng": CENTER_LNG + profile["offset"][1]}
+        create_user_entry(profile, "LAB_TECH", email, "password123", loc)
+
+    # Create patients
     collection = db.collection("patients")
-    for i in range(50):
-        patient = build_patient(i)
+    used_sample_ids: set = set()
+    for i in range(80):
+        patient = build_patient(i, asha_users, used_sample_ids)
         collection.document(patient["patient_local_id"]).set(patient, merge=True)
-    print("Inserted 50 dummy patients into Firestore.")
+
+    print("Demo data ready.")
 
 
 if __name__ == "__main__":
-    main()
+    setup_database()

@@ -128,14 +128,23 @@ def get_hear_score(_: Optional[List[AudioMeta]]) -> float:
     return round(random.uniform(0.2, 0.95), 2)
 
 
-def get_medgemini_summary(_: Optional[List[Symptom]]) -> str:
-    options = [
-        "Symptoms suggest possible TB; recommend sputum test.",
-        "Moderate risk; prioritize clinical evaluation.",
-        "Low risk; monitor and follow up if symptoms persist.",
-        "High risk profile; urgent testing advised.",
-    ]
-    return random.choice(options)
+def get_medgemini_summary(risk_score: float, triage_status: Optional[str]) -> str:
+    if triage_status == "ASSIGNED_TO_LAB":
+        return "Assigned to lab for confirmatory testing. Prioritize sample processing."
+    if triage_status == "LAB_DONE":
+        return "Lab work completed. Review results and finalize treatment plan."
+    if triage_status == "UNDER_TREATMENT":
+        return "Patient on treatment. Continue monitoring and adherence support."
+    if triage_status == "CLEARED":
+        return "Low concern. Provide routine follow-up and health education."
+    if triage_status == "TEST_PENDING":
+        return "Testing pending. Schedule sputum or X-ray as soon as possible."
+
+    if risk_score >= 8:
+        return "High TB suspicion. Urgent evaluation and testing recommended."
+    if risk_score >= 5:
+        return "Moderate TB risk. Expedite diagnostics and follow-up."
+    return "Low TB risk. Monitor symptoms and advise follow-up if worsening."
 
 
 def get_risk_level(score: float) -> str:
@@ -216,10 +225,11 @@ async def sync_patients(request: Request, _: Dict[str, Any] = Depends(verify_fir
 
         hear_score = get_hear_score(record.audio)
         risk_score = round(min(10.0, hear_score * 10), 1)
+        triage_status = record.status.triage_status if record.status else None
         ai_result = AIResult(
             hear_embedding_id=str(uuid.uuid4()),
             hear_score=hear_score,
-            medgemini_summary=get_medgemini_summary(record.symptoms),
+            medgemini_summary=get_medgemini_summary(risk_score, triage_status),
             risk_score=risk_score,
             risk_level=get_risk_level(risk_score),
         )

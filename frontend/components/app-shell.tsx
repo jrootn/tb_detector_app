@@ -18,10 +18,23 @@ interface GPSLocation {
   error: string | null
 }
 
-export function AppShell() {
-  const [currentScreen, setCurrentScreen] = useState<Screen>("login")
+interface AppShellProps {
+  initialScreen?: Screen
+  initialAshaId?: string
+  initialAshaName?: string
+  onLogout?: () => void
+}
+
+export function AppShell({
+  initialScreen = "login",
+  initialAshaId = "",
+  initialAshaName = "",
+  onLogout,
+}: AppShellProps) {
+  const [currentScreen, setCurrentScreen] = useState<Screen>(initialScreen)
   const [isOnline, setIsOnline] = useState(true)
-  const [ashaId, setAshaId] = useState("")
+  const [ashaId, setAshaId] = useState(initialAshaId)
+  const [ashaName, setAshaName] = useState(initialAshaName)
   const [patients, setPatients] = useState<Patient[]>(mockPatients)
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
   const [dbReady, setDbReady] = useState(false)
@@ -111,6 +124,25 @@ export function AppShell() {
     }
   }, [])
 
+  // Refresh from IndexedDB after sync completes
+  useEffect(() => {
+    const handler = async () => {
+      const stored = await getAllPatients()
+      setPatients(stored)
+    }
+
+    window.addEventListener("sync:complete", handler)
+    return () => {
+      window.removeEventListener("sync:complete", handler)
+    }
+  }, [])
+
+  // When back online, refresh local cache to clear stale sync flags
+  useEffect(() => {
+    if (!dbReady || !isOnline) return
+    getAllPatients().then(setPatients).catch(() => undefined)
+  }, [dbReady, isOnline])
+
   // Persist patient changes to IndexedDB
   useEffect(() => {
     if (!dbReady) return
@@ -129,9 +161,13 @@ export function AppShell() {
       // Can't logout when offline - this will be handled in dashboard
       return
     }
+    if (onLogout) {
+      onLogout()
+      return
+    }
     setAshaId("")
     setCurrentScreen("login")
-  }, [isOnline])
+  }, [isOnline, onLogout])
 
   const handleViewPatient = useCallback((patient: Patient) => {
     setSelectedPatient(patient)
@@ -156,6 +192,7 @@ export function AppShell() {
         {currentScreen === "dashboard" && (
           <DashboardScreen
             ashaId={ashaId}
+            ashaName={ashaName}
             isOnline={isOnline}
             patients={patients}
             onLogout={handleLogout}

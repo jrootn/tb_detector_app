@@ -86,6 +86,9 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
   const { t, language } = useLanguage()
   const [step, setStep] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [showSampleId, setShowSampleId] = useState(false)
+  const [generatedSampleId, setGeneratedSampleId] = useState<string | null>(null)
+  const [pendingPatient, setPendingPatient] = useState<Patient | null>(null)
   const totalSteps = 4
   
   const [formData, setFormData] = useState<FormData>({
@@ -190,6 +193,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     else if (riskScore >= 4) riskLevel = "medium"
 
     // Create new patient
+    const sampleId = `TX-${Math.floor(100 + Math.random() * 900)}`
     const newPatient: Patient = {
       id: result.patientId,
       name: formData.name,
@@ -222,16 +226,13 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       collectionDate: today,
       latitude: gpsLocation.latitude || undefined,
       longitude: gpsLocation.longitude || undefined,
+      sampleId,
     }
 
-    if (!isOnline) {
-      alert(t.savedToLocal)
-    } else {
-      alert(t.screeningSubmitted)
-    }
-
+    setGeneratedSampleId(sampleId)
+    setPendingPatient(newPatient)
+    setShowSampleId(true)
     setIsSubmitting(false)
-    onComplete(newPatient)
   }
 
   const togglePhysicalSign = (sign: string) => {
@@ -263,6 +264,37 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       return `${weeks} ${t.weeks}`
     }
     return `${weeks} ${t.weeks} ${remainingDays} ${t.days}`
+  }
+
+  if (showSampleId && generatedSampleId && pendingPatient) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center bg-background">
+        <div className="max-w-md space-y-4">
+          <div className="text-sm text-muted-foreground">
+            {language === "en"
+              ? "Write this ID on the Sputum Cup using a marker."
+              : "इस आईडी को मार्कर से सैंपल कप पर लिखें।"}
+          </div>
+          <div className="text-5xl font-bold tracking-widest">{generatedSampleId}</div>
+          <Button
+            className="w-full"
+            onClick={() => {
+              if (!isOnline) {
+                alert(t.savedToLocal)
+              } else {
+                alert(t.screeningSubmitted)
+              }
+              setShowSampleId(false)
+              onComplete(pendingPatient)
+              setPendingPatient(null)
+              setGeneratedSampleId(null)
+            }}
+          >
+            {language === "en" ? "Continue" : "जारी रखें"}
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   return (

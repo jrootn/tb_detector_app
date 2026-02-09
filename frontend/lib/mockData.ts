@@ -41,6 +41,9 @@ export interface Patient {
   createdAt: string
   collectionDate: string
   scheduledTestDate?: string
+
+  // Sample ID for lab matching
+  sampleId?: string
   
   // GPS Location (stored but not displayed)
   latitude?: number
@@ -98,7 +101,7 @@ export const mockPatients: Patient[] = [
     riskLevel: "high",
     status: "testPending",
     distanceToPHC: 12.3,
-    needsSync: true,
+    needsSync: false,
     testScheduled: false,
     weight: 45,
     height: 155,
@@ -164,7 +167,7 @@ export const mockPatients: Patient[] = [
     riskLevel: "medium",
     status: "testPending",
     distanceToPHC: 15.8,
-    needsSync: true,
+    needsSync: false,
     testScheduled: false,
     weight: 52,
     height: 160,
@@ -260,7 +263,7 @@ export const mockPatients: Patient[] = [
     riskLevel: "low",
     status: "testPending",
     distanceToPHC: 10.2,
-    needsSync: true,
+    needsSync: false,
     testScheduled: true,
     weight: 70,
     height: 175,
@@ -377,10 +380,11 @@ export const mockPatients: Patient[] = [
 
 // Statistics calculated from mock data
 export function getStats(patients: Patient[]) {
+  const today = new Date().toISOString().split("T")[0]
   return {
     highRisk: patients.filter((p) => p.riskLevel === "high").length,
     pendingUploads: patients.filter((p) => p.needsSync).length,
-    testsToday: patients.filter((p) => p.testScheduled).length,
+    testsToday: patients.filter((p) => p.scheduledTestDate === today || (p.testScheduled && p.scheduledTestDate === today)).length,
     total: patients.length,
   }
 }

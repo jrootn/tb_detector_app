@@ -48,6 +48,7 @@ interface GPSLocation {
 
 interface DashboardScreenProps {
   ashaId: string
+  ashaName?: string
   isOnline: boolean
   patients: Patient[]
   onLogout: () => void
@@ -61,6 +62,7 @@ type FilterType = "all" | "critical" | "needsSync" | "testScheduled"
 
 export function DashboardScreen({
   ashaId,
+  ashaName,
   isOnline,
   patients,
   onLogout,
@@ -87,7 +89,7 @@ export function DashboardScreen({
         filtered = filtered.filter((patient) => patient.needsSync)
         break
       case "testScheduled":
-        filtered = filtered.filter((patient) => patient.testScheduled)
+        filtered = filtered.filter((patient) => patient.testScheduled || Boolean(patient.scheduledTestDate))
         break
     }
 
@@ -198,7 +200,9 @@ export function DashboardScreen({
       <div className="bg-primary text-primary-foreground px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-sm opacity-90">{t.welcome}, {ashaId}</p>
+            <p className="text-sm opacity-90">
+              {t.welcome}, {ashaName || ashaId || (language === "en" ? "ASHA Worker" : "आशा कार्यकर्ता")}
+            </p>
             <p className="flex items-center gap-1.5 text-xs opacity-75">
               <MapPin className="h-3.5 w-3.5" />
               {gpsLocation.latitude && gpsLocation.longitude
@@ -241,7 +245,10 @@ export function DashboardScreen({
             </CardContent>
           </Card>
 
-          <Card className="border-l-4 border-l-amber-500">
+          <Card
+            className="border-l-4 border-l-amber-500 cursor-pointer"
+            onClick={() => setFilter("needsSync")}
+          >
             <CardHeader className="p-3 pb-1">
               <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
                 <RefreshCw className="h-3.5 w-3.5 text-amber-500" />
@@ -253,7 +260,10 @@ export function DashboardScreen({
             </CardContent>
           </Card>
 
-          <Card className="border-l-4 border-l-sky-500">
+          <Card
+            className="border-l-4 border-l-sky-500 cursor-pointer"
+            onClick={() => setFilter("testScheduled")}
+          >
             <CardHeader className="p-3 pb-1">
               <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
                 <Calendar className="h-3.5 w-3.5 text-sky-500" />

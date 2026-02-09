@@ -6,13 +6,10 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   Activity,
   ArrowLeft,
   Brain,
-  Calendar,
   CheckCircle2,
   ClipboardList,
   Mic,
@@ -30,8 +27,6 @@ interface PatientProfileProps {
 
 export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProfileProps) {
   const { t, language } = useLanguage()
-  const [scheduledDate, setScheduledDate] = useState(patient.scheduledTestDate || "")
-  const [showDatePicker, setShowDatePicker] = useState(false)
 
   const getRiskBadgeStyle = (level: RiskLevel) => {
     switch (level) {
@@ -115,6 +110,15 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
     }
   }
   
+  const stages = [
+    { label: t.collected, done: true },
+    { label: t.synced, done: !patient.needsSync },
+    { label: t.aiAnalysisDone, done: Boolean(patient.medGemmaReasoning || patient.hearAudioScore) },
+    { label: t.doctorReviewed, done: patient.status !== "awaitingDoctor" },
+    { label: t.testScheduledLabel, done: Boolean(patient.testScheduled || patient.status === "testPending" || patient.status === "underTreatment" || patient.status === "cleared") },
+    { label: t.testCompleted, done: patient.status === "underTreatment" || patient.status === "cleared" },
+  ]
+
   // Helper to format cough duration (now in days)
   const formatCoughDuration = (days?: number) => {
     if (!days) return "-"
@@ -125,19 +129,6 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
       return `${weeks} ${t.weeks}`
     }
     return `${weeks} ${t.weeks} ${remainingDays} ${t.days}`
-  }
-
-  const handleScheduleTest = () => {
-    if (scheduledDate) {
-      const updatedPatient: Patient = {
-        ...patient,
-        scheduledTestDate: scheduledDate,
-        testScheduled: true,
-      }
-      onUpdatePatient(updatedPatient)
-      alert(`${t.testScheduled}: ${scheduledDate}`)
-      setShowDatePicker(false)
-    }
   }
 
   return (
@@ -179,6 +170,19 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
             </Badge>
             <p className="text-sm font-medium mt-1">{getRiskLabel(patient.riskLevel)} {t.riskScore}</p>
           </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {stages.map((stage) => (
+            <div
+              key={stage.label}
+              className={`rounded-md border px-2.5 py-2 text-center text-xs font-medium ${
+                stage.done ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-muted text-muted-foreground"
+              }`}
+            >
+              {stage.label}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -346,59 +350,6 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
 
           {/* Actions Tab */}
           <TabsContent value="actions" className="mt-4 space-y-4">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Calendar className="h-5 w-5 text-primary" />
-                  {t.scheduleTest}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {!showDatePicker ? (
-                  <div>
-                    {scheduledDate ? (
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm text-muted-foreground">
-                            {language === "en" ? "Test scheduled for:" : "परीक्षण निर्धारित:"}
-                          </p>
-                          <p className="font-medium text-lg">{scheduledDate}</p>
-                        </div>
-                        <Button variant="outline" onClick={() => setShowDatePicker(true)}>
-                          {language === "en" ? "Change" : "बदलें"}
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button onClick={() => setShowDatePicker(true)} className="w-full">
-                        <Calendar className="h-4 w-4 mr-2" />
-                        {t.scheduleTest}
-                      </Button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="space-y-2">
-                      <Label>{language === "en" ? "Select Date" : "तारीख चुनें"}</Label>
-                      <Input
-                        type="date"
-                        value={scheduledDate}
-                        onChange={(e) => setScheduledDate(e.target.value)}
-                        min={new Date().toISOString().split("T")[0]}
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <Button variant="outline" onClick={() => setShowDatePicker(false)} className="flex-1">
-                        {language === "en" ? "Cancel" : "रद्द करें"}
-                      </Button>
-                      <Button onClick={handleScheduleTest} className="flex-1">
-                        {language === "en" ? "Confirm" : "पुष्टि करें"}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center gap-2">

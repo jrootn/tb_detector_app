@@ -128,6 +128,14 @@ interface Translations {
   isolateFromChildren: string
   wearMask: string
   ventilateRoom: string
+
+  // Workflow status
+  collected: string
+  synced: string
+  aiAnalysisDone: string
+  doctorReviewed: string
+  testScheduledLabel: string
+  testCompleted: string
   
   // Status
   awaitingDoctor: string
@@ -149,7 +157,7 @@ interface Translations {
 
 const translations: Record<Language, Translations> = {
   en: {
-    appName: "TB-Triage AI",
+    appName: "Smart TB Triage",
     login: "Login",
     logout: "Logout",
     dashboard: "Dashboard",
@@ -261,6 +269,13 @@ const translations: Record<Language, Translations> = {
     isolateFromChildren: "Isolate from children",
     wearMask: "Wear mask at all times",
     ventilateRoom: "Keep room well ventilated",
+
+    collected: "Collected",
+    synced: "Synced",
+    aiAnalysisDone: "AI Analysis",
+    doctorReviewed: "Doctor Review",
+    testScheduledLabel: "Test Scheduled",
+    testCompleted: "Test Done",
     
     awaitingDoctor: "Awaiting Doctor",
     testPending: "Test Pending",
@@ -277,7 +292,7 @@ const translations: Record<Language, Translations> = {
     village: "Village",
   },
   hi: {
-    appName: "टीबी-ट्राइएज एआई",
+    appName: "स्मार्ट टीबी ट्राइएज",
     login: "लॉगिन",
     logout: "लॉगआउट",
     dashboard: "डैशबोर्ड",
@@ -389,6 +404,13 @@ const translations: Record<Language, Translations> = {
     isolateFromChildren: "बच्चों से दूर रखें",
     wearMask: "हमेशा मास्क पहनें",
     ventilateRoom: "कमरे में हवा आने दें",
+
+    collected: "संग्रहित",
+    synced: "सिंक हो गया",
+    aiAnalysisDone: "एआई विश्लेषण",
+    doctorReviewed: "डॉक्टर समीक्षा",
+    testScheduledLabel: "टेस्ट निर्धारित",
+    testCompleted: "टेस्ट पूरा",
     
     awaitingDoctor: "डॉक्टर की प्रतीक्षा",
     testPending: "परीक्षण लंबित",
