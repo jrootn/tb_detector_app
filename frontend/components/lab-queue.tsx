@@ -1,8 +1,10 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { collection, getDocs } from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { collection, getDocs, doc, updateDoc } from "firebase/firestore"
+import { db, storage, auth } from "@/lib/firebase"
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage"
+import { addUpload } from "@/lib/db"
 
 interface PatientRecord {
   id: string
@@ -15,6 +17,7 @@ interface PatientRecord {
 
 export function LabQueue() {
   const [patients, setPatients] = useState<PatientRecord[]>([])
+  const [uploadingId, setUploadingId] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchPatients = async () => {
@@ -43,6 +46,7 @@ export function LabQueue() {
               <th className="text-left p-3">AI Risk</th>
               <th className="text-left p-3">Status</th>
               <th className="text-left p-3">ASHA Phone</th>
+              <th className="text-left p-3">Upload Report</th>
             </tr>
           </thead>
           <tbody>
@@ -55,6 +59,52 @@ export function LabQueue() {
                 </td>
                 <td className="p-3">{p.status?.triage_status || "-"}</td>
                 <td className="p-3">{p.asha_phone_number || "-"}</td>
+                <td className="p-3">
+                  <input
+                    type="file"
+                    accept="application/pdf,image/*"
+                    disabled={uploadingId === p.id}
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0]
+                      if (!file) return
+
+                      if (!navigator.onLine) {
+                        await addUpload({
+                          id: `${Date.now()}-${file.name}`,
+                          patientId: p.id,
+                          role: "LAB_TECH",
+                          kind: "report",
+                          fileName: file.name,
+                          mimeType: file.type || "application/pdf",
+                          blob: file,
+                          createdAt: new Date().toISOString(),
+                        })
+                        alert("Saved for sync when online.")
+                        return
+                      }
+
+                      try {
+                        setUploadingId(p.id)
+                        const userId = auth.currentUser?.uid || "lab"
+                        const path = `lab_results/${userId}/${p.id}/${Date.now()}-${file.name}`
+                        const fileRef = ref(storage, path)
+                        await uploadBytes(fileRef, file, { contentType: file.type || "application/pdf" })
+                        const url = await getDownloadURL(fileRef)
+                        await updateDoc(doc(db, "patients", p.id), {
+                          lab_results: {
+                            report_uri: url,
+                            uploaded_at: new Date().toISOString(),
+                            uploaded_by: userId,
+                          },
+                          "status.triage_status": "LAB_DONE",
+                        })
+                        alert("Report uploaded.")
+                      } finally {
+                        setUploadingId(null)
+                      }
+                    }}
+                  />
+                </td>
               </tr>
             ))}
             {queue.length === 0 && (

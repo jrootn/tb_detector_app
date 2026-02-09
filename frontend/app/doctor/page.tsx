@@ -6,10 +6,12 @@ import { doc, getDoc } from "firebase/firestore"
 import { useRouter } from "next/navigation"
 import { auth, db } from "@/lib/firebase"
 import { DoctorDashboard } from "@/components/doctor-dashboard"
+import { useAutoSync } from "@/hooks/useAutoSync"
 
 export default function DoctorPage() {
   const router = useRouter()
   const [ready, setReady] = useState(false)
+  useAutoSync()
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {

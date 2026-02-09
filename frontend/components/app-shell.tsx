@@ -8,7 +8,7 @@ import { ScreeningFlow } from "./screening-flow"
 import { PatientProfile } from "./patient-profile"
 import { PriorityView } from "./priority-view"
 import { mockPatients, type Patient } from "@/lib/mockData"
-import { getAllPatients, savePatients, seedPatientsIfEmpty } from "@/lib/db"
+import { getAllPatients, savePatients, seedPatientsIfEmpty, getPendingUploadCount } from "@/lib/db"
 
 type Screen = "login" | "dashboard" | "screening" | "profile" | "priority"
 
@@ -35,6 +35,7 @@ export function AppShell({
   const [isOnline, setIsOnline] = useState(true)
   const [ashaId, setAshaId] = useState(initialAshaId)
   const [ashaName, setAshaName] = useState(initialAshaName)
+  const [pendingUploads, setPendingUploads] = useState(0)
   const [patients, setPatients] = useState<Patient[]>(mockPatients)
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
   const [dbReady, setDbReady] = useState(false)
@@ -111,6 +112,9 @@ export function AppShell({
         if (isMounted && stored.length > 0) {
           setPatients(stored)
         }
+        const pendingCount = await getPendingUploadCount()
+        const needsSyncCount = stored.filter((p) => p.needsSync).length
+        if (isMounted) setPendingUploads(pendingCount + needsSyncCount)
       } catch (error) {
         console.error("Failed to load patients from IndexedDB", error)
       } finally {
@@ -129,6 +133,9 @@ export function AppShell({
     const handler = async () => {
       const stored = await getAllPatients()
       setPatients(stored)
+      const pendingCount = await getPendingUploadCount()
+      const needsSyncCount = stored.filter((p) => p.needsSync).length
+      setPendingUploads(pendingCount + needsSyncCount)
     }
 
     window.addEventListener("sync:complete", handler)
@@ -141,6 +148,12 @@ export function AppShell({
   useEffect(() => {
     if (!dbReady || !isOnline) return
     getAllPatients().then(setPatients).catch(() => undefined)
+    Promise.all([getAllPatients(), getPendingUploadCount()])
+      .then(([stored, pendingCount]) => {
+        const needsSyncCount = stored.filter((p) => p.needsSync).length
+        setPendingUploads(pendingCount + needsSyncCount)
+      })
+      .catch(() => undefined)
   }, [dbReady, isOnline])
 
   // Persist patient changes to IndexedDB
@@ -195,6 +208,7 @@ export function AppShell({
             ashaName={ashaName}
             isOnline={isOnline}
             patients={patients}
+            pendingUploads={pendingUploads}
             onLogout={handleLogout}
             onNewScreening={() => setCurrentScreen("screening")}
             onViewPatient={handleViewPatient}

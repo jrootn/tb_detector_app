@@ -1,13 +1,16 @@
+import io
 import math
 import os
 import random
 import uuid
+import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import firebase_admin
 from firebase_admin import auth, credentials, firestore, initialize_app
+from google.cloud import storage
 
 
 def _utc_now() -> str:
@@ -31,6 +34,37 @@ else:
     initialize_app(credentials.ApplicationDefault())
 
 db = firestore.client()
+
+UPLOAD_DUMMY_MEDIA = os.environ.get("UPLOAD_DUMMY_MEDIA") == "1"
+STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET") or os.environ.get("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET")
+
+
+def get_storage_bucket():
+    if not UPLOAD_DUMMY_MEDIA or not STORAGE_BUCKET:
+        return None
+    client = storage.Client.from_service_account_json(cred_path)
+    return client.bucket(STORAGE_BUCKET)
+
+
+def generate_wav_bytes(duration_sec: int = 4, sample_rate: int = 16000) -> bytes:
+    frames = int(duration_sec * sample_rate)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"\x00\x00" * frames)
+    return buffer.getvalue()
+
+
+def generate_pdf_bytes() -> bytes:
+    return b\"%PDF-1.4\\n1 0 obj<<>>endobj\\ntrailer<<>>\\n%%EOF\"
+
+
+def upload_blob(bucket, path: str, data: bytes, content_type: str) -> str:
+    blob = bucket.blob(path)
+    blob.upload_from_string(data, content_type=content_type)
+    return f\"gs://{bucket.name}/{path}\"
 
 
 FIRST_NAMES = [
@@ -225,7 +259,12 @@ def generate_summary(risk_score: float, triage_status: str) -> str:
     return "Low TB risk. Monitor symptoms and advise follow-up if worsening."
 
 
-def build_patient(idx: int, asha_users: List[Tuple[str, Dict]], used_sample_ids: set) -> Dict:
+def build_patient(
+    idx: int,
+    asha_users: List[Tuple[str, Dict]],
+    used_sample_ids: set,
+    bucket,
+) -> Dict:
     first = random.choice(FIRST_NAMES)
     last = random.choice(LAST_NAMES)
     name = f"{first} {last} {idx + 1}"
@@ -264,6 +303,16 @@ def build_patient(idx: int, asha_users: List[Tuple[str, Dict]], used_sample_ids:
         k=1,
     )[0]
     risk_score = calculate_risk_score(symptoms, risk_factors_positive)
+
+    audio_uri = None
+    if bucket:
+        audio_path = f"asha_uploads/{asha_uid}/{patient_local_id}/audio-{uuid.uuid4().hex}.wav"
+        audio_uri = upload_blob(bucket, audio_path, generate_wav_bytes(4), "audio/wav")
+
+    report_uri = None
+    if bucket and triage_status in {"LAB_DONE", "UNDER_TREATMENT", "CLEARED"}:
+        report_path = f"lab_results/dummy/{patient_local_id}/report-{uuid.uuid4().hex}.pdf"
+        report_uri = upload_blob(bucket, report_path, generate_pdf_bytes(), "application/pdf")
 
     patient = {
         "patient_local_id": patient_local_id,
@@ -309,7 +358,7 @@ def build_patient(idx: int, asha_users: List[Tuple[str, Dict]], used_sample_ids:
                 "file_name": "cough.wav",
                 "mime_type": "audio/wav",
                 "duration_sec": round(random.uniform(2.0, 6.0), 1),
-                "storage_uri": None,
+                "storage_uri": audio_uri,
                 "uploaded_at": _utc_now(),
             }
         ],
@@ -327,6 +376,11 @@ def build_patient(idx: int, asha_users: List[Tuple[str, Dict]], used_sample_ids:
             "test_scheduled_date": None,
             "doctor_notes": None,
         },
+        "lab_results": {
+            "report_uri": report_uri,
+            "uploaded_at": _utc_now() if report_uri else None,
+            "uploaded_by": "dummy",
+        } if report_uri else None,
     }
     return patient
 
@@ -381,8 +435,9 @@ def setup_database() -> None:
     # Create patients
     collection = db.collection("patients")
     used_sample_ids: set = set()
+    bucket = get_storage_bucket()
     for i in range(80):
-        patient = build_patient(i, asha_users, used_sample_ids)
+        patient = build_patient(i, asha_users, used_sample_ids, bucket)
         collection.document(patient["patient_local_id"]).set(patient, merge=True)
 
     print("Demo data ready.")

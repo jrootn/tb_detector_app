@@ -1,6 +1,8 @@
-import { getAllPatients, savePatients } from "@/lib/db"
+import { getAllPatients, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
 import type { Patient } from "@/lib/mockData"
-import { auth } from "@/lib/firebase"
+import { auth, db, storage } from "@/lib/firebase"
+import { doc, updateDoc, arrayUnion } from "firebase/firestore"
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
 
@@ -57,32 +59,89 @@ export async function syncData() {
     const idToken = await currentUser.getIdToken()
     const patients = await getAllPatients()
     const pending = patients.filter((p) => p.needsSync)
-    if (pending.length === 0) return
-
     const records = pending.map((p) => mapPatientToSyncRecord(p, currentUser.uid))
 
-    const res = await fetch(`${API_BASE}/v1/sync`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${idToken}`,
-      },
-      body: JSON.stringify({ records }),
-    })
+    if (records.length > 0) {
+      const res = await fetch(`${API_BASE}/v1/sync`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ records }),
+      })
 
-    if (!res.ok) {
-      throw new Error(`Sync failed: ${res.status}`)
+      if (!res.ok) {
+        throw new Error(`Sync failed: ${res.status}`)
+      }
+
+      const updated = patients.map((p) =>
+        pending.find((x) => x.id === p.id) ? { ...p, needsSync: false } : p
+      )
+      await savePatients(updated)
     }
 
-    const updated = patients.map((p) =>
-      pending.find((x) => x.id === p.id) ? { ...p, needsSync: false } : p
-    )
-    await savePatients(updated)
+    await syncUploads(currentUser.uid)
 
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("sync:complete"))
     }
   } catch (error) {
     console.error("Sync failed", error)
+  }
+}
+
+export async function syncUploads(userId: string) {
+  if (!navigator.onLine) return
+
+  const uploads = await getPendingUploads()
+  if (uploads.length === 0) return
+
+  for (const upload of uploads) {
+    const safeName = `${Date.now()}-${upload.fileName}`.replace(/\s+/g, "_")
+    let path = ""
+    if (upload.role === "ASHA") {
+      path = `asha_uploads/${userId}/${upload.patientId}/${safeName}`
+    } else if (upload.role === "LAB_TECH") {
+      path = `lab_results/${userId}/${upload.patientId}/${safeName}`
+    } else {
+      path = `doctor_uploads/${upload.patientId}/${safeName}`
+    }
+
+    const fileRef = ref(storage, path)
+    await uploadBytes(fileRef, upload.blob, { contentType: upload.mimeType })
+    const url = await getDownloadURL(fileRef)
+
+    const patientRef = doc(db, "patients", upload.patientId)
+    const uploadedAt = new Date().toISOString()
+
+    if (upload.role === "LAB_TECH" && upload.kind === "report") {
+      await updateDoc(patientRef, {
+        lab_results: {
+          report_uri: url,
+          uploaded_at: uploadedAt,
+          uploaded_by: userId,
+        },
+      })
+    } else if (upload.role === "DOCTOR" && upload.kind === "report") {
+      await updateDoc(patientRef, {
+        doctor_files: arrayUnion({
+          name: upload.fileName,
+          url,
+          uploaded_at: uploadedAt,
+        }),
+      })
+    } else {
+      await updateDoc(patientRef, {
+        audio: arrayUnion({
+          file_name: upload.fileName,
+          mime_type: upload.mimeType,
+          storage_uri: url,
+          uploaded_at: uploadedAt,
+        }),
+      })
+    }
+
+    await removeUpload(upload.id)
   }
 }

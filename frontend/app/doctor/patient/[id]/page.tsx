@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation"
 import { doc, getDoc, updateDoc } from "firebase/firestore"
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage"
 import { db, storage } from "@/lib/firebase"
+import { addUpload } from "@/lib/db"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -23,6 +24,7 @@ interface PatientRecord {
   prescription?: string
   sample_id?: string
   doctor_files?: { name: string; url: string; uploaded_at: string }[]
+  lab_results?: { report_uri?: string; uploaded_at?: string }
 }
 
 export default function DoctorPatientPage() {
@@ -70,6 +72,20 @@ export default function DoctorPatientPage() {
 
   const uploadFile = async (file: File) => {
     if (!patient) return
+    if (!navigator.onLine) {
+      await addUpload({
+        id: `${Date.now()}-${file.name}`,
+        patientId: patient.id,
+        role: "DOCTOR",
+        kind: "report",
+        fileName: file.name,
+        mimeType: file.type || "application/pdf",
+        blob: file,
+        createdAt: new Date().toISOString(),
+      })
+      alert("Saved for sync when online.")
+      return
+    }
     setUploading(true)
     const fileRef = ref(storage, `doctor_uploads/${patient.id}/${Date.now()}-${file.name}`)
     await uploadBytes(fileRef, file)
@@ -140,6 +156,24 @@ export default function DoctorPatientPage() {
           ))}
         </CardContent>
       </Card>
+
+      {patient.lab_results?.report_uri && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Lab Report</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <a
+              href={patient.lab_results.report_uri}
+              className="text-sm text-blue-600 underline"
+              target="_blank"
+              rel="noreferrer"
+            >
+              View Report
+            </a>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

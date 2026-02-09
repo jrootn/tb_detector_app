@@ -26,8 +26,12 @@ export default function LoginPage() {
       const result = await signInWithEmailAndPassword(auth, email, password)
       const snap = await getDoc(doc(db, "users", result.user.uid))
       const role = snap.data()?.role
+      const name = snap.data()?.name
       if (role) {
         localStorage.setItem("user_role", role)
+      }
+      if (name) {
+        localStorage.setItem("user_name", name)
       }
 
       if (role === "ASHA") router.replace("/asha")

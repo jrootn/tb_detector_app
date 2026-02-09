@@ -13,6 +13,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Activity, ArrowLeft, ArrowRight, Check, Mic, MicOff, AlertTriangle } from "lucide-react"
 import { LanguageSwitcher } from "./language-switcher"
 import { submitScreening, calculateRiskScore, type ScreeningData } from "@/lib/api"
+import { addUpload, assignPendingUploadsToPatient } from "@/lib/db"
 import type { Patient, RiskLevel } from "@/lib/mockData"
 
 interface GPSLocation {
@@ -135,10 +136,10 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       },
     }))
 
-    // Simulate recording for 1-3 seconds
-    const duration = Math.random() * 2000 + 1000
+    // Simulate recording for 4-6 seconds
+    const duration = Math.random() * 2000 + 4000
     setTimeout(() => {
-      const isGood = duration > 2000
+      const isGood = duration > 4500
       setFormData((prev) => ({
         ...prev,
         audioRecordings: {
@@ -147,6 +148,21 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
         },
       }))
     }, duration)
+  }
+
+  const handleAudioUpload = async (file: File) => {
+    const upload = {
+      id: `${Date.now()}-${file.name}`,
+      patientId: "pending",
+      role: "ASHA" as const,
+      kind: "audio" as const,
+      fileName: file.name,
+      mimeType: file.type || "audio/wav",
+      blob: file,
+      createdAt: new Date().toISOString(),
+    }
+    await addUpload(upload)
+    alert(language === "en" ? "Audio saved for sync." : "ऑडियो सिंक के लिए सहेजा गया।")
   }
 
   const handleSubmit = async () => {
@@ -228,6 +244,8 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       longitude: gpsLocation.longitude || undefined,
       sampleId,
     }
+
+    await assignPendingUploadsToPatient(newPatient.id)
 
     setGeneratedSampleId(sampleId)
     setPendingPatient(newPatient)
@@ -688,6 +706,20 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                   t={t}
                 />
               ))}
+
+              <div className="rounded-lg border p-4">
+                <p className="text-sm font-medium mb-2">
+                  {language === "en" ? "Upload Audio File (Optional)" : "ऑडियो फ़ाइल अपलोड करें (वैकल्पिक)"}
+                </p>
+                <Input
+                  type="file"
+                  accept="audio/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) handleAudioUpload(file)
+                  }}
+                />
+              </div>
             </CardContent>
           </Card>
         )}

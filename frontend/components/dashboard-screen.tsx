@@ -51,6 +51,7 @@ interface DashboardScreenProps {
   ashaName?: string
   isOnline: boolean
   patients: Patient[]
+  pendingUploads: number
   onLogout: () => void
   onNewScreening: () => void
   onViewPatient: (patient: Patient) => void
@@ -65,6 +66,7 @@ export function DashboardScreen({
   ashaName,
   isOnline,
   patients,
+  pendingUploads,
   onLogout,
   onNewScreening,
   onViewPatient,
@@ -256,7 +258,7 @@ export function DashboardScreen({
               </CardTitle>
             </CardHeader>
             <CardContent className="p-3 pt-0">
-              <p className="text-2xl font-bold text-amber-600">{stats.pendingUploads}</p>
+              <p className="text-2xl font-bold text-amber-600">{pendingUploads}</p>
             </CardContent>
           </Card>
 
