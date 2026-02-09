@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
-import { collection, getDocs, updateDoc, doc } from "firebase/firestore"
+import { collection, updateDoc, doc, onSnapshot, query } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -45,15 +45,33 @@ export function DoctorDashboard() {
   const [specificDate, setSpecificDate] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [search, setSearch] = useState("")
+  const [isOnline, setIsOnline] = useState(true)
 
   useEffect(() => {
     setMounted(true)
-    const fetchPatients = async () => {
-      const snap = await getDocs(collection(db, "patients"))
-      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as PatientRecord) }))
-      setPatients(rows)
+    const q = query(collection(db, "patients"))
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as PatientRecord) }))
+        setPatients(rows)
+      },
+      (error) => {
+        console.error("Failed to load patients", error)
+      }
+    )
+    return () => unsub()
+  }, [])
+
+  useEffect(() => {
+    const handler = () => setIsOnline(navigator.onLine)
+    handler()
+    window.addEventListener("online", handler)
+    window.addEventListener("offline", handler)
+    return () => {
+      window.removeEventListener("online", handler)
+      window.removeEventListener("offline", handler)
     }
-    fetchPatients()
   }, [])
 
   const filtered = useMemo(() => {
@@ -289,7 +307,15 @@ export function DoctorDashboard() {
         </div>
       )}
 
-      {view === "map" && mounted && (
+      {view === "map" && !isOnline && (
+        <Card>
+          <CardContent className="p-6 text-sm text-muted-foreground">
+            Map tiles require internet access. Please go online to view the heatmap.
+          </CardContent>
+        </Card>
+      )}
+
+      {view === "map" && mounted && isOnline && (
         <div className="h-[70vh] w-full overflow-hidden rounded-lg border">
           <MapContainer center={[21.1458, 79.0882]} zoom={11} className="h-full w-full">
             <TileLayer

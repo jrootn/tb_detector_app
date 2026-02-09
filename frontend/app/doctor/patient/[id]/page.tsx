@@ -61,6 +61,14 @@ export default function DoctorPatientPage() {
     setPatient((prev) => prev ? { ...prev, status: { triage_status: "ASSIGNED_TO_LAB" } } : prev)
   }
 
+  const updateStatus = async (status: string) => {
+    if (!patient) return
+    await updateDoc(doc(db, "patients", patient.id), {
+      "status.triage_status": status,
+    })
+    setPatient((prev) => (prev ? { ...prev, status: { triage_status: status } } : prev))
+  }
+
   const saveNotes = async () => {
     if (!patient) return
     await updateDoc(doc(db, "patients", patient.id), {
@@ -180,7 +188,15 @@ export default function DoctorPatientPage() {
           <CardTitle>Actions</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Button onClick={assignToLab}>Assign to Lab</Button>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={assignToLab}>Assign to Lab</Button>
+            <Button variant="outline" onClick={() => updateStatus("TEST_PENDING")}>Mark Test Pending</Button>
+            <Button variant="outline" onClick={() => updateStatus("UNDER_TREATMENT")}>Under Treatment</Button>
+            <Button variant="outline" onClick={() => updateStatus("CLEARED")}>Mark Cleared</Button>
+          </div>
+          <div className="text-sm text-muted-foreground">
+            Current Status: {patient.status?.triage_status || "AWAITING_DOCTOR"}
+          </div>
           <div className="space-y-2">
             <label className="text-sm">Doctor Notes</label>
             <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} />

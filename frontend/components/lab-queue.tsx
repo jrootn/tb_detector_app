@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { collection, getDocs, doc, updateDoc } from "firebase/firestore"
+import { collection, doc, updateDoc, onSnapshot, query } from "firebase/firestore"
 import { db, storage, auth } from "@/lib/firebase"
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage"
 import { addUpload } from "@/lib/db"
@@ -20,12 +20,16 @@ export function LabQueue() {
   const [uploadingId, setUploadingId] = useState<string | null>(null)
 
   useEffect(() => {
-    const fetchPatients = async () => {
-      const snap = await getDocs(collection(db, "patients"))
-      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as PatientRecord) }))
-      setPatients(rows)
-    }
-    fetchPatients()
+    const q = query(collection(db, "patients"))
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as PatientRecord) }))
+        setPatients(rows)
+      },
+      (error) => console.error("Failed to load lab queue", error)
+    )
+    return () => unsub()
   }, [])
 
   const queue = useMemo(() => {

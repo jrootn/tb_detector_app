@@ -58,13 +58,13 @@ def generate_wav_bytes(duration_sec: int = 4, sample_rate: int = 16000) -> bytes
 
 
 def generate_pdf_bytes() -> bytes:
-    return b\"%PDF-1.4\\n1 0 obj<<>>endobj\\ntrailer<<>>\\n%%EOF\"
+    return b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
 
 
 def upload_blob(bucket, path: str, data: bytes, content_type: str) -> str:
     blob = bucket.blob(path)
     blob.upload_from_string(data, content_type=content_type)
-    return f\"gs://{bucket.name}/{path}\"
+    return f"gs://{bucket.name}/{path}"
 
 
 FIRST_NAMES = [
