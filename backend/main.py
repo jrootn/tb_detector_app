@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from firebase_admin import auth, credentials, firestore, initialize_app
 from pydantic import BaseModel, Field
 
@@ -179,6 +180,17 @@ def verify_firebase_token(request: Request) -> Dict[str, Any]:
 # FastAPI app
 # ----------------------
 app = FastAPI(title="Smart TB Triage System", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/v1/sync")

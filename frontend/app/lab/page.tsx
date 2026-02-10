@@ -13,7 +13,7 @@ export default function LabPage() {
   const router = useRouter()
   const [ready, setReady] = useState(false)
   const [isOnline, setIsOnline] = useState(true)
-  useAutoSync({ uploadsOnly: true })
+  useAutoSync(true)
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {

@@ -35,6 +35,8 @@ export default function DoctorPatientPage() {
   const [instruction, setInstruction] = useState("")
   const [prescription, setPrescription] = useState("")
   const [uploading, setUploading] = useState(false)
+  const [resolvedAudio, setResolvedAudio] = useState<Record<number, string>>({})
+  const [resolvedReport, setResolvedReport] = useState<string | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -49,6 +51,31 @@ export default function DoctorPatientPage() {
       setNote(data.doctor_notes || "")
       setInstruction(data.doctor_instructions || "")
       setPrescription(data.prescription || "")
+
+      if (data.audio) {
+        const next: Record<number, string> = {}
+        await Promise.all(
+          data.audio.map(async (a, idx) => {
+            if (!a.storage_uri) return
+            try {
+              const url = await getDownloadURL(ref(storage, a.storage_uri))
+              next[idx] = url
+            } catch {
+              next[idx] = a.storage_uri
+            }
+          })
+        )
+        setResolvedAudio(next)
+      }
+
+      if (data.lab_results?.report_uri) {
+        try {
+          const url = await getDownloadURL(ref(storage, data.lab_results.report_uri))
+          setResolvedReport(url)
+        } catch {
+          setResolvedReport(data.lab_results.report_uri)
+        }
+      }
     }
     load()
   }, [params, router])
@@ -156,7 +183,7 @@ export default function DoctorPatientPage() {
           {(patient.audio || []).map((a, idx) => (
             <div key={idx} className="text-sm">
               {a.storage_uri ? (
-                <audio controls src={a.storage_uri} />
+                <audio controls src={resolvedAudio[idx] || a.storage_uri} />
               ) : (
                 <span>{a.file_name || "Audio"} (not uploaded)</span>
               )}
@@ -172,7 +199,7 @@ export default function DoctorPatientPage() {
           </CardHeader>
           <CardContent>
             <a
-              href={patient.lab_results.report_uri}
+              href={resolvedReport || patient.lab_results.report_uri}
               className="text-sm text-blue-600 underline"
               target="_blank"
               rel="noreferrer"

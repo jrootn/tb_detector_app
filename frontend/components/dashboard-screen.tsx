@@ -59,7 +59,7 @@ interface DashboardScreenProps {
   gpsLocation: GPSLocation
 }
 
-type FilterType = "all" | "critical" | "needsSync" | "testScheduled"
+type FilterType = "all" | "critical" | "needsSync" | "testScheduled" | "completed"
 
 export function DashboardScreen({
   ashaId,
@@ -92,6 +92,11 @@ export function DashboardScreen({
         break
       case "testScheduled":
         filtered = filtered.filter((patient) => patient.testScheduled || Boolean(patient.scheduledTestDate))
+        break
+      case "completed":
+        filtered = filtered.filter(
+          (patient) => patient.status === "cleared" || patient.status === "underTreatment"
+        )
         break
     }
 
@@ -291,6 +296,7 @@ export function DashboardScreen({
                   { key: "critical" as FilterType, label: t.criticalRisk },
                   { key: "needsSync" as FilterType, label: t.needsSync },
                   { key: "testScheduled" as FilterType, label: t.testScheduled },
+                  { key: "completed" as FilterType, label: language === "en" ? "Completed" : "पूर्ण" },
                 ].map((item) => (
                   <Button
                     key={item.key}

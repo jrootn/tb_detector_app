@@ -46,6 +46,7 @@ export function DoctorDashboard() {
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [search, setSearch] = useState("")
   const [isOnline, setIsOnline] = useState(true)
+  const [mapKey, setMapKey] = useState(0)
 
   useEffect(() => {
     setMounted(true)
@@ -73,6 +74,12 @@ export function DoctorDashboard() {
       window.removeEventListener("offline", handler)
     }
   }, [])
+
+  useEffect(() => {
+    if (view === "map" && isOnline) {
+      setMapKey((prev) => prev + 1)
+    }
+  }, [view, isOnline])
 
   const filtered = useMemo(() => {
     const now = new Date()
@@ -351,7 +358,8 @@ export function DoctorDashboard() {
       {view === "map" && mounted && isOnline && (
         <div className="h-[70vh] w-full overflow-hidden rounded-lg border">
           <MapContainer
-            key={`map-${isOnline}`}
+            key={`map-${mapKey}`}
+            id={`map-${mapKey}`}
             center={[21.1458, 79.0882]}
             zoom={11}
             className="h-full w-full"
