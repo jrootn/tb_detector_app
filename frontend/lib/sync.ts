@@ -49,7 +49,7 @@ function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string) {
   }
 }
 
-export async function syncData() {
+export async function syncData(options: { uploadsOnly?: boolean } = {}) {
   if (!navigator.onLine) return
 
   const currentUser = auth.currentUser
@@ -61,24 +61,28 @@ export async function syncData() {
     const pending = patients.filter((p) => p.needsSync)
     const records = pending.map((p) => mapPatientToSyncRecord(p, currentUser.uid))
 
-    if (records.length > 0) {
-      const res = await fetch(`${API_BASE}/v1/sync`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ records }),
-      })
+    if (!options.uploadsOnly && records.length > 0) {
+      try {
+        const res = await fetch(`${API_BASE}/v1/sync`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({ records }),
+        })
 
-      if (!res.ok) {
-        throw new Error(`Sync failed: ${res.status}`)
+        if (!res.ok) {
+          throw new Error(`Sync failed: ${res.status}`)
+        }
+
+        const updated = patients.map((p) =>
+          pending.find((x) => x.id === p.id) ? { ...p, needsSync: false } : p
+        )
+        await savePatients(updated)
+      } catch (error) {
+        console.warn("Patient sync skipped:", error)
       }
-
-      const updated = patients.map((p) =>
-        pending.find((x) => x.id === p.id) ? { ...p, needsSync: false } : p
-      )
-      await savePatients(updated)
     }
 
     await syncUploads(currentUser.uid)
@@ -87,7 +91,7 @@ export async function syncData() {
       window.dispatchEvent(new Event("sync:complete"))
     }
   } catch (error) {
-    console.error("Sync failed", error)
+    console.warn("Sync failed", error)
   }
 }
 

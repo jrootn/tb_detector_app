@@ -176,6 +176,39 @@ export function DoctorDashboard() {
     return Object.entries(buckets).map(([name, value]) => ({ name, value }))
   }, [patients])
 
+  const highRiskPatients = useMemo(() => {
+    return patients.filter((p) => (p.ai?.risk_score ?? 0) >= 7)
+  }, [patients])
+
+  const exportAnalytics = () => {
+    const lines: string[] = []
+    lines.push("Metric,Value")
+    lines.push(`Total Patients,${patients.length}`)
+    lines.push(`High Risk,${highRiskPatients.length}`)
+    lines.push(
+      `Awaiting Doctor,${patients.filter((p) => p.status?.triage_status === "AWAITING_DOCTOR").length}`
+    )
+
+    lines.push("")
+    lines.push("High Risk Patients")
+    lines.push("Name,Sample ID,Risk Score,Status")
+    highRiskPatients.forEach((p) => {
+      const name = p.demographics?.name || "Unknown"
+      const sample = p.sample_id || "-"
+      const score = p.ai?.risk_score ?? 0
+      const status = p.status?.triage_status || "AWAITING_DOCTOR"
+      lines.push(`${name},${sample},${score},${status}`)
+    })
+
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = "doctor-analytics.csv"
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   const statusBadge = (status?: string) => {
     switch (status) {
       case "ASSIGNED_TO_LAB":
@@ -317,7 +350,12 @@ export function DoctorDashboard() {
 
       {view === "map" && mounted && isOnline && (
         <div className="h-[70vh] w-full overflow-hidden rounded-lg border">
-          <MapContainer center={[21.1458, 79.0882]} zoom={11} className="h-full w-full">
+          <MapContainer
+            key={`map-${isOnline}`}
+            center={[21.1458, 79.0882]}
+            zoom={11}
+            className="h-full w-full"
+          >
             <TileLayer
               attribution='&copy; OpenStreetMap contributors'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -342,6 +380,12 @@ export function DoctorDashboard() {
 
       {view === "analytics" && (
         <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={exportAnalytics}>Export CSV</Button>
+            <Button variant="outline" onClick={() => window.print()}>
+              Print
+            </Button>
+          </div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <Card>
               <CardHeader className="pb-2">
@@ -398,6 +442,38 @@ export function DoctorDashboard() {
                   <Bar dataKey="value" fill="#2563eb" />
                 </BarChart>
               </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">High Risk Patients</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {highRiskPatients.length === 0 && (
+                <div className="text-sm text-muted-foreground">No high risk patients</div>
+              )}
+              {highRiskPatients.length > 0 && (
+                <div className="divide-y rounded-md border">
+                  {highRiskPatients.map((p) => (
+                    <div key={p.id} className="flex items-center justify-between p-3">
+                      <div>
+                        <div className="text-sm font-medium">{p.demographics?.name || "Unknown"}</div>
+                        <div className="text-xs text-muted-foreground">
+                          Sample: {p.sample_id || "-"} • Score: {p.ai?.risk_score ?? 0}
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => router.push(`/doctor/patient/${p.id}`)}
+                      >
+                        View
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

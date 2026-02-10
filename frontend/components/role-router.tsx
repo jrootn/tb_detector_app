@@ -9,6 +9,18 @@ import { auth, db } from "@/lib/firebase"
 export function RoleRouter() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
+  const [isOnline, setIsOnline] = useState(true)
+
+  useEffect(() => {
+    const handler = () => setIsOnline(navigator.onLine)
+    handler()
+    window.addEventListener("online", handler)
+    window.addEventListener("offline", handler)
+    return () => {
+      window.removeEventListener("online", handler)
+      window.removeEventListener("offline", handler)
+    }
+  }, [])
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -29,16 +41,17 @@ export function RoleRouter() {
         else router.replace("/login")
       } catch (error) {
         const cachedRole = localStorage.getItem("user_role")
-        if (cachedRole === "ASHA") router.replace("/asha")
-        else if (cachedRole === "DOCTOR") router.replace("/doctor")
-        else if (cachedRole === "LAB_TECH") router.replace("/lab")
-        else router.replace("/login")
+        if (!isOnline && cachedRole === "ASHA") {
+          router.replace("/asha")
+        } else {
+          router.replace("/login")
+        }
       }
       setLoading(false)
     })
 
     return () => unsub()
-  }, [router])
+  }, [router, isOnline])
 
   if (loading) return <div className="p-6">Loading...</div>
   return null

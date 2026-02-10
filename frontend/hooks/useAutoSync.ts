@@ -1,19 +1,23 @@
 import { useEffect } from "react"
 import { syncData } from "@/lib/sync"
 
-export function useAutoSync() {
+interface AutoSyncOptions {
+  uploadsOnly?: boolean
+}
+
+export function useAutoSync(options: AutoSyncOptions = {}) {
   useEffect(() => {
     const handler = () => {
       if (navigator.onLine) {
-        syncData()
+        syncData(options)
       }
     }
 
     if (navigator.onLine) {
-      syncData()
+      syncData(options)
     }
 
     window.addEventListener("online", handler)
     return () => window.removeEventListener("online", handler)
-  }, [])
+  }, [options])
 }
