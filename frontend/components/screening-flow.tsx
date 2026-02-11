@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useLanguage } from "@/lib/language-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Slider } from "@/components/ui/slider"
 import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Activity, ArrowLeft, ArrowRight, Check, Mic, MicOff, AlertTriangle } from "lucide-react"
+import { Activity, ArrowLeft, ArrowRight, Check, AlertTriangle } from "lucide-react"
 import { LanguageSwitcher } from "./language-switcher"
 import { submitScreening, calculateRiskScore, type ScreeningData } from "@/lib/api"
 import { addUpload, assignPendingUploadsToPatient } from "@/lib/db"
@@ -90,6 +90,8 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
   const [showSampleId, setShowSampleId] = useState(false)
   const [generatedSampleId, setGeneratedSampleId] = useState<string | null>(null)
   const [pendingPatient, setPendingPatient] = useState<Patient | null>(null)
+  const [uploadedAudioName, setUploadedAudioName] = useState<string>("")
+  const [uploadedAudioPreview, setUploadedAudioPreview] = useState<string>("")
   const totalSteps = 4
   
   const [formData, setFormData] = useState<FormData>({
@@ -127,29 +129,6 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     }
   }
 
-  const simulateRecording = (slot: "slot1" | "slot2" | "slot3") => {
-    setFormData((prev) => ({
-      ...prev,
-      audioRecordings: {
-        ...prev.audioRecordings,
-        [slot]: "recording",
-      },
-    }))
-
-    // Simulate recording for 4-6 seconds
-    const duration = Math.random() * 2000 + 4000
-    setTimeout(() => {
-      const isGood = duration > 4500
-      setFormData((prev) => ({
-        ...prev,
-        audioRecordings: {
-          ...prev.audioRecordings,
-          [slot]: isGood ? "good" : "tooShort",
-        },
-      }))
-    }, duration)
-  }
-
   const handleAudioUpload = async (file: File) => {
     const upload = {
       id: `${Date.now()}-${file.name}`,
@@ -162,8 +141,21 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       createdAt: new Date().toISOString(),
     }
     await addUpload(upload)
+    const preview = URL.createObjectURL(file)
+    setUploadedAudioName(file.name)
+    setUploadedAudioPreview(preview)
+    setFormData((prev) => ({
+      ...prev,
+      audioRecordings: { ...prev.audioRecordings, slot1: "good", slot2: "idle", slot3: "idle" },
+    }))
     alert(language === "en" ? "Audio saved for sync." : "ऑडियो सिंक के लिए सहेजा गया।")
   }
+
+  useEffect(() => {
+    return () => {
+      if (uploadedAudioPreview) URL.revokeObjectURL(uploadedAudioPreview)
+    }
+  }, [uploadedAudioPreview])
 
   const handleSubmit = async () => {
     setIsSubmitting(true)
@@ -192,8 +184,8 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       otherObservations: formData.otherObservations,
       audioRecordings: {
         slot1: formData.audioRecordings.slot1 === "good",
-        slot2: formData.audioRecordings.slot2 === "good",
-        slot3: formData.audioRecordings.slot3 === "good",
+        slot2: false,
+        slot3: false,
       },
       submittedAt: new Date().toISOString(),
       ashaWorkerId: ashaId,
@@ -693,23 +685,14 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
               <CardTitle className="text-lg">{t.audioCollection}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {(["slot1", "slot2", "slot3"] as const).map((slot, index) => (
-                <AudioRecordingSlot
-                  key={slot}
-                  slotNumber={index + 1}
-                  status={formData.audioRecordings[slot]}
-                  onRecord={() => simulateRecording(slot)}
-                  onRetry={() => setFormData((prev) => ({
-                    ...prev,
-                    audioRecordings: { ...prev.audioRecordings, [slot]: "idle" },
-                  }))}
-                  t={t}
-                />
-              ))}
-
               <div className="rounded-lg border p-4">
                 <p className="text-sm font-medium mb-2">
-                  {language === "en" ? "Upload Audio File (Optional)" : "ऑडियो फ़ाइल अपलोड करें (वैकल्पिक)"}
+                  {language === "en" ? "Upload Cough Audio (one file)" : "खांसी का ऑडियो अपलोड करें (एक फ़ाइल)"}
+                </p>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  {language === "en"
+                    ? "Use a short, clear recording in WAV/MP3/M4A format."
+                    : "WAV/MP3/M4A में छोटी और साफ रिकॉर्डिंग अपलोड करें।"}
                 </p>
                 <Input
                   type="file"
@@ -719,6 +702,16 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                     if (file) handleAudioUpload(file)
                   }}
                 />
+                {uploadedAudioName && (
+                  <div className="mt-3 rounded-md bg-muted p-3">
+                    <div className="text-xs text-muted-foreground">
+                      {language === "en" ? "Selected file" : "चयनित फ़ाइल"}: {uploadedAudioName}
+                    </div>
+                    {uploadedAudioPreview && (
+                      <audio controls className="mt-2 w-full" src={uploadedAudioPreview} />
+                    )}
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -764,101 +757,6 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-interface AudioRecordingSlotProps {
-  slotNumber: number
-  status: "idle" | "recording" | "tooShort" | "good"
-  onRecord: () => void
-  onRetry: () => void
-  t: ReturnType<typeof useLanguage>["t"]
-}
-
-function AudioRecordingSlot({ slotNumber, status, onRecord, onRetry, t }: AudioRecordingSlotProps) {
-  return (
-    <div className="border rounded-lg p-4 bg-muted/30">
-      <div className="flex items-center justify-between mb-3">
-        <span className="font-medium">{t.recordSlot} {slotNumber}</span>
-        {status === "good" && (
-          <span className="flex items-center gap-1 text-sm text-emerald-600 font-medium">
-            <Check className="h-4 w-4" />
-            {t.goodQuality}
-          </span>
-        )}
-        {status === "tooShort" && (
-          <span className="flex items-center gap-1 text-sm text-amber-600 font-medium">
-            <AlertTriangle className="h-4 w-4" />
-            {t.tooShort}
-          </span>
-        )}
-      </div>
-
-      {/* Simulated Waveform */}
-      <div className="h-12 bg-background rounded-md mb-3 flex items-center justify-center overflow-hidden">
-        {status === "idle" && (
-          <div className="flex gap-1">
-            {Array.from({ length: 20 }).map((_, i) => (
-              <div
-                key={i}
-                className="w-1 bg-muted-foreground/30 rounded-full"
-                style={{ height: `${Math.random() * 20 + 10}px` }}
-              />
-            ))}
-          </div>
-        )}
-        {status === "recording" && (
-          <div className="flex gap-1">
-            {Array.from({ length: 20 }).map((_, i) => (
-              <div
-                key={i}
-                className="w-1 bg-primary rounded-full animate-pulse"
-                style={{
-                  height: `${Math.random() * 30 + 10}px`,
-                  animationDelay: `${i * 50}ms`,
-                }}
-              />
-            ))}
-          </div>
-        )}
-        {(status === "good" || status === "tooShort") && (
-          <div className="flex gap-1">
-            {Array.from({ length: 20 }).map((_, i) => (
-              <div
-                key={i}
-                className={`w-1 rounded-full ${status === "good" ? "bg-emerald-500" : "bg-amber-500"}`}
-                style={{ height: `${Math.random() * 25 + 8}px` }}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Action Button */}
-      {status === "idle" && (
-        <Button onClick={onRecord} className="w-full bg-transparent" variant="outline">
-          <Mic className="h-4 w-4 mr-2" />
-          {t.tapToRecord}
-        </Button>
-      )}
-      {status === "recording" && (
-        <Button disabled className="w-full bg-red-500 text-white hover:bg-red-600">
-          <Mic className="h-4 w-4 mr-2 animate-pulse" />
-          {t.recording}
-        </Button>
-      )}
-      {status === "tooShort" && (
-        <Button onClick={onRetry} className="w-full bg-transparent" variant="outline">
-          <MicOff className="h-4 w-4 mr-2" />
-          {t.retry}
-        </Button>
-      )}
-      {status === "good" && (
-        <Button onClick={onRetry} className="w-full" variant="ghost">
-          {t.retry}
-        </Button>
-      )}
     </div>
   )
 }

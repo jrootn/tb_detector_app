@@ -12,6 +12,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 
+const AWAITING_DOCTOR = "AWAITING_DOCTOR"
+const ASSIGNED_TO_LAB = "ASSIGNED_TO_LAB"
+const TEST_PENDING = "TEST_PENDING"
+const UNDER_TREATMENT = "UNDER_TREATMENT"
+const CLEARED = "CLEARED"
+
 interface PatientRecord {
   id: string
   demographics?: { name?: string; phone?: string; age?: number; gender?: string }
@@ -28,6 +34,11 @@ interface PatientRecord {
   lab_results?: { report_uri?: string; report_path?: string; uploaded_at?: string }
 }
 
+function normalizeName(name?: string) {
+  if (!name) return "Unknown"
+  return name.replace(/\s+\d+$/, "")
+}
+
 export default function DoctorPatientPage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
@@ -36,6 +47,7 @@ export default function DoctorPatientPage() {
   const [instruction, setInstruction] = useState("")
   const [prescription, setPrescription] = useState("")
   const [uploading, setUploading] = useState(false)
+  const [savingStatus, setSavingStatus] = useState(false)
   const [resolvedAudio, setResolvedAudio] = useState<Record<number, string>>({})
   const [resolvedReport, setResolvedReport] = useState<string | null>(null)
   const [resolvedDoctorFiles, setResolvedDoctorFiles] = useState<Record<number, string>>({})
@@ -83,20 +95,21 @@ export default function DoctorPatientPage() {
     load()
   }, [params, router])
 
-  const assignToLab = async () => {
-    if (!patient) return
-    await updateDoc(doc(db, "patients", patient.id), {
-      "status.triage_status": "ASSIGNED_TO_LAB",
-    })
-    setPatient((prev) => prev ? { ...prev, status: { triage_status: "ASSIGNED_TO_LAB" } } : prev)
-  }
-
   const updateStatus = async (status: string) => {
     if (!patient) return
-    await updateDoc(doc(db, "patients", patient.id), {
-      "status.triage_status": status,
-    })
+    const previous = patient.status?.triage_status || AWAITING_DOCTOR
+    setSavingStatus(true)
     setPatient((prev) => (prev ? { ...prev, status: { triage_status: status } } : prev))
+    try {
+      await updateDoc(doc(db, "patients", patient.id), {
+        "status.triage_status": status,
+      })
+    } catch (error) {
+      setPatient((prev) => (prev ? { ...prev, status: { triage_status: previous } } : prev))
+      alert("Could not update status. Please retry.")
+    } finally {
+      setSavingStatus(false)
+    }
   }
 
   const saveNotes = async () => {
@@ -134,10 +147,13 @@ export default function DoctorPatientPage() {
       const url = await resolveStorageUrl(path)
 
       const existing = patient.doctor_files || []
-      const next = [
-        ...existing,
-        { name: file.name, url: url || undefined, storage_path: path, uploaded_at: new Date().toISOString() },
-      ]
+      const entry: { name: string; storage_path: string; uploaded_at: string; url?: string } = {
+        name: file.name,
+        storage_path: path,
+        uploaded_at: new Date().toISOString(),
+      }
+      if (url) entry.url = url
+      const next = [...existing, entry]
 
       await updateDoc(doc(db, "patients", patient.id), {
         doctor_files: next,
@@ -145,13 +161,46 @@ export default function DoctorPatientPage() {
 
       setPatient((prev) => (prev ? { ...prev, doctor_files: next } : prev))
     } catch (error) {
-      alert("Upload failed. Check storage rules and role mapping for this user.")
+      const message =
+        error instanceof Error ? error.message : "Upload failed. Check storage rules and role mapping for this user."
+      alert(message)
     } finally {
       setUploading(false)
     }
   }
 
   if (!patient) return <div className="p-6">Loading...</div>
+
+  const currentStatus = patient.status?.triage_status || AWAITING_DOCTOR
+  const statusLabelMap: Record<string, string> = {
+    [AWAITING_DOCTOR]: "Awaiting Doctor Review",
+    [ASSIGNED_TO_LAB]: "Assigned To Lab",
+    [TEST_PENDING]: "Test Pending",
+    [UNDER_TREATMENT]: "Under Treatment",
+    [CLEARED]: "Cleared",
+  }
+  const actionButtons = [
+    {
+      key: ASSIGNED_TO_LAB,
+      label: "Assign to Lab",
+      help: "Use after doctor review when lab sample/report is required.",
+    },
+    {
+      key: TEST_PENDING,
+      label: "Mark Test Pending",
+      help: "Use when test is advised but sample/result is not completed yet.",
+    },
+    {
+      key: UNDER_TREATMENT,
+      label: "Under Treatment",
+      help: "Use once TB treatment is started.",
+    },
+    {
+      key: CLEARED,
+      label: "Mark Cleared",
+      help: "Use when no active TB action is needed after review/tests.",
+    },
+  ]
 
   return (
     <div className="min-h-screen p-4 space-y-4 bg-background">
@@ -161,7 +210,7 @@ export default function DoctorPatientPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{patient.demographics?.name || "Unknown"}</CardTitle>
+          <CardTitle>{normalizeName(patient.demographics?.name)}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="text-sm text-muted-foreground">Sample ID: {patient.sample_id || "-"}</div>
@@ -193,8 +242,12 @@ export default function DoctorPatientPage() {
         <CardContent className="space-y-2">
           {(patient.audio || []).map((a, idx) => (
             <div key={idx} className="text-sm">
-              {a.storage_uri ? (
-                <audio controls src={resolvedAudio[idx] || a.storage_uri} />
+              {a.storage_uri || a.storage_path || a.download_url ? (
+                resolvedAudio[idx] ? (
+                  <audio controls src={resolvedAudio[idx]} />
+                ) : (
+                  <span>{a.file_name || "Audio"} (unable to resolve URL)</span>
+                )
               ) : (
                 <span>{a.file_name || "Audio"} (not uploaded)</span>
               )}
@@ -225,14 +278,28 @@ export default function DoctorPatientPage() {
           <CardTitle>Actions</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="rounded-md border bg-muted/40 p-3 text-sm">
+            <div className="font-medium">How to use actions</div>
+            <div className="mt-1 text-muted-foreground">
+              Sample ID token is auto-generated at ASHA collection and should not be edited by doctor.
+            </div>
+          </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={assignToLab}>Assign to Lab</Button>
-            <Button variant="outline" onClick={() => updateStatus("TEST_PENDING")}>Mark Test Pending</Button>
-            <Button variant="outline" onClick={() => updateStatus("UNDER_TREATMENT")}>Under Treatment</Button>
-            <Button variant="outline" onClick={() => updateStatus("CLEARED")}>Mark Cleared</Button>
+            {actionButtons.map((action) => (
+              <Button
+                key={action.key}
+                variant={currentStatus === action.key ? "default" : "outline"}
+                disabled={savingStatus}
+                title={action.help}
+                onClick={() => updateStatus(action.key)}
+              >
+                {action.label}
+              </Button>
+            ))}
           </div>
           <div className="text-sm text-muted-foreground">
-            Current Status: {patient.status?.triage_status || "AWAITING_DOCTOR"}
+            Current Status: {statusLabelMap[currentStatus] || currentStatus}
+            {savingStatus ? " • Updating..." : ""}
           </div>
           <div className="space-y-2">
             <label className="text-sm">Doctor Notes</label>

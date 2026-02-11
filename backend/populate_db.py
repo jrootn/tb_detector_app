@@ -270,11 +270,21 @@ def build_patient(
     idx: int,
     asha_users: List[Tuple[str, Dict]],
     used_sample_ids: set,
+    used_names: set,
     bucket,
 ) -> Dict:
     first = random.choice(FIRST_NAMES)
     last = random.choice(LAST_NAMES)
-    name = f"{first} {last} {idx + 1}"
+    name = f"{first} {last}"
+    attempts = 0
+    while name in used_names and attempts < 15:
+        first = random.choice(FIRST_NAMES)
+        last = random.choice(LAST_NAMES)
+        name = f"{first} {last}"
+        attempts += 1
+    if name in used_names:
+        name = f"{first} {last} {random.choice(VILLAGES)}"
+    used_names.add(name)
     village = random.choice(VILLAGES)
     age = random.randint(18, 70)
     gender = random.choice(["male", "female", "other"])
@@ -377,7 +387,6 @@ def build_patient(
             "risk_level": "HIGH" if risk_score >= 7.0 else "MEDIUM" if risk_score >= 4.0 else "LOW",
         },
         "doctor_priority": random.random() < 0.1,
-        "doctor_rank": random.randint(-5, 5),
         "status": {
             "triage_status": triage_status,
             "test_scheduled_date": None,
@@ -442,9 +451,10 @@ def setup_database() -> None:
     # Create patients
     collection = db.collection("patients")
     used_sample_ids: set = set()
+    used_names: set = set()
     bucket = get_storage_bucket()
     for i in range(80):
-        patient = build_patient(i, asha_users, used_sample_ids, bucket)
+        patient = build_patient(i, asha_users, used_sample_ids, used_names, bucket)
         collection.document(patient["patient_local_id"]).set(patient, merge=True)
 
     print("Demo data ready.")

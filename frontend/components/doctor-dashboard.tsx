@@ -7,10 +7,12 @@ import { db } from "@/lib/firebase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { AlertTriangle, Clock3, Download, Filter, Printer, Users } from "lucide-react"
 import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -32,6 +34,11 @@ interface PatientRecord {
   created_at_offline?: string
 }
 
+function normalizeName(name?: string) {
+  if (!name) return "Unknown"
+  return name.replace(/\s+\d+$/, "")
+}
+
 export function DoctorDashboard() {
   const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
@@ -39,9 +46,12 @@ export function DoctorDashboard() {
   const [mounted, setMounted] = useState(false)
   const [filter, setFilter] = useState<"all" | "today" | "week" | "30days" | "date">("all")
   const [specificDate, setSpecificDate] = useState("")
-  const [statusFilter, setStatusFilter] = useState<string>("all")
+  const [statusFilter, setStatusFilter] = useState<string>("AWAITING_DOCTOR")
   const [search, setSearch] = useState("")
   const [isOnline, setIsOnline] = useState(true)
+  const [csvOnlyHighRisk, setCsvOnlyHighRisk] = useState(false)
+  const [csvIncludeSummary, setCsvIncludeSummary] = useState(true)
+  const [csvIncludeCoordinates, setCsvIncludeCoordinates] = useState(false)
 
   useEffect(() => {
     setMounted(true)
@@ -78,7 +88,7 @@ export function DoctorDashboard() {
       }
 
       if (search) {
-        const name = p.demographics?.name?.toLowerCase() || ""
+        const name = normalizeName(p.demographics?.name).toLowerCase()
         const sampleId = p.sample_id?.toLowerCase() || ""
         if (!name.includes(search.toLowerCase()) && !sampleId.includes(search.toLowerCase())) {
           return false
@@ -114,9 +124,18 @@ export function DoctorDashboard() {
       const aPriority = a.doctor_priority ? 1 : 0
       const bPriority = b.doctor_priority ? 1 : 0
       if (aPriority !== bPriority) return bPriority - aPriority
-      const aRank = a.doctor_rank ?? 0
-      const bRank = b.doctor_rank ?? 0
-      if (aRank !== bRank) return aRank - bRank
+      const aAwaiting = (a.status?.triage_status || "AWAITING_DOCTOR") === "AWAITING_DOCTOR"
+      const bAwaiting = (b.status?.triage_status || "AWAITING_DOCTOR") === "AWAITING_DOCTOR"
+      if (aAwaiting !== bAwaiting) return aAwaiting ? -1 : 1
+      const aHasRank = typeof a.doctor_rank === "number"
+      const bHasRank = typeof b.doctor_rank === "number"
+      if (aHasRank && bHasRank) {
+        if ((a.doctor_rank as number) !== (b.doctor_rank as number)) {
+          return (a.doctor_rank as number) - (b.doctor_rank as number)
+        }
+      } else if (aHasRank !== bHasRank) {
+        return aHasRank ? -1 : 1
+      }
       const aScore = a.ai?.risk_score ?? 0
       const bScore = b.ai?.risk_score ?? 0
       return bScore - aScore
@@ -152,55 +171,116 @@ export function DoctorDashboard() {
     )
   }
 
+  const toStatusLabel = (status?: string) => {
+    if (!status) return "Awaiting Doctor"
+    switch (status) {
+      case "AWAITING_DOCTOR":
+        return "Awaiting Doctor"
+      case "ASSIGNED_TO_LAB":
+        return "Assigned to Lab"
+      case "LAB_DONE":
+        return "Lab Done"
+      case "TEST_PENDING":
+        return "Test Pending"
+      case "UNDER_TREATMENT":
+        return "Under Treatment"
+      case "CLEARED":
+        return "Cleared"
+      default:
+        return status.replaceAll("_", " ")
+    }
+  }
+
+  const analyticsPatients = sorted
+
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {}
-    patients.forEach((p) => {
-      const status = p.status?.triage_status || "AWAITING_DOCTOR"
+    analyticsPatients.forEach((p) => {
+      const status = toStatusLabel(p.status?.triage_status)
       counts[status] = (counts[status] || 0) + 1
     })
     return Object.entries(counts).map(([name, value]) => ({ name, value }))
-  }, [patients])
+  }, [analyticsPatients])
 
   const riskBuckets = useMemo(() => {
     const buckets = { High: 0, Medium: 0, Low: 0 }
-    patients.forEach((p) => {
+    analyticsPatients.forEach((p) => {
       const score = p.ai?.risk_score ?? 0
       if (score >= 7) buckets.High += 1
       else if (score >= 4) buckets.Medium += 1
       else buckets.Low += 1
     })
     return Object.entries(buckets).map(([name, value]) => ({ name, value }))
-  }, [patients])
+  }, [analyticsPatients])
 
   const highRiskPatients = useMemo(() => {
-    return patients.filter((p) => (p.ai?.risk_score ?? 0) >= 7)
-  }, [patients])
+    return analyticsPatients.filter((p) => (p.ai?.risk_score ?? 0) >= 7)
+  }, [analyticsPatients])
+
+  const csvRows = useMemo(() => {
+    if (!csvOnlyHighRisk) return analyticsPatients
+    return analyticsPatients.filter((p) => (p.ai?.risk_score ?? 0) >= 7)
+  }, [analyticsPatients, csvOnlyHighRisk])
+
+  const dateFilterLabel = useMemo(() => {
+    if (filter === "all") return "All dates"
+    if (filter === "today") return "Today"
+    if (filter === "week") return "This week"
+    if (filter === "30days") return "Last 30 days"
+    if (filter === "date" && specificDate) return specificDate
+    return "Specific date"
+  }, [filter, specificDate])
+
+  const csvEscape = (value: unknown) => {
+    if (value === null || value === undefined) return ""
+    const s = String(value)
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+    return s
+  }
 
   const exportAnalytics = () => {
     const lines: string[] = []
-    lines.push("Metric,Value")
-    lines.push(`Total Patients,${patients.length}`)
-    lines.push(`High Risk,${highRiskPatients.length}`)
-    lines.push(
-      `Awaiting Doctor,${patients.filter((p) => p.status?.triage_status === "AWAITING_DOCTOR").length}`
-    )
-
+    lines.push("Export,Doctor Filtered Analytics")
+    lines.push(`Generated At,${new Date().toISOString()}`)
+    lines.push(`Rows Exported,${csvRows.length}`)
+    lines.push(`Search,${search || "none"}`)
+    lines.push(`Status Filter,${statusFilter}`)
+    lines.push(`Date Filter,${dateFilterLabel}`)
+    lines.push(`Only High Risk,${csvOnlyHighRisk ? "yes" : "no"}`)
     lines.push("")
-    lines.push("High Risk Patients")
-    lines.push("Name,Sample ID,Risk Score,Status")
-    highRiskPatients.forEach((p) => {
-      const name = p.demographics?.name || "Unknown"
-      const sample = p.sample_id || "-"
-      const score = p.ai?.risk_score ?? 0
-      const status = p.status?.triage_status || "AWAITING_DOCTOR"
-      lines.push(`${name},${sample},${score},${status}`)
+
+    const headers = ["Name", "Sample ID", "Risk Score", "Status", "Priority", "Doctor Rank"]
+    if (csvIncludeCoordinates) {
+      headers.push("Latitude", "Longitude")
+    }
+    if (csvIncludeSummary) {
+      headers.push("AI Summary")
+    }
+    lines.push(headers.join(","))
+
+    csvRows.forEach((p) => {
+      const row: unknown[] = [
+        normalizeName(p.demographics?.name),
+        p.sample_id || "-",
+        p.ai?.risk_score ?? 0,
+        toStatusLabel(p.status?.triage_status),
+        p.doctor_priority ? "urgent" : "normal",
+        p.doctor_rank ?? 0,
+      ]
+      if (csvIncludeCoordinates) {
+        row.push(p.gps?.lat ?? "", p.gps?.lng ?? "")
+      }
+      if (csvIncludeSummary) {
+        row.push(p.ai?.medgemini_summary || "")
+      }
+      lines.push(row.map(csvEscape).join(","))
     })
 
     const blob = new Blob([lines.join("\n")], { type: "text/csv" })
     const url = URL.createObjectURL(blob)
     const link = document.createElement("a")
     link.href = url
-    link.download = "doctor-analytics.csv"
+    link.download = `doctor-filtered-export-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`
     link.click()
     URL.revokeObjectURL(url)
   }
@@ -288,9 +368,9 @@ export function DoctorDashboard() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center justify-between">
                   <span className="flex items-center gap-2">
-                    {patient.demographics?.name || "Unknown"}
+                    {normalizeName(patient.demographics?.name)}
                     <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(patient.status?.triage_status)}`}>
-                      {patient.status?.triage_status || "AWAITING_DOCTOR"}
+                      {toStatusLabel(patient.status?.triage_status)}
                     </span>
                   </span>
                   <span className={`text-sm ${patient.ai?.risk_score && patient.ai.risk_score >= 8 ? "text-red-600" : "text-emerald-600"}`}>
@@ -305,6 +385,7 @@ export function DoctorDashboard() {
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={(patient.status?.triage_status || "AWAITING_DOCTOR") !== "AWAITING_DOCTOR"}
                       onClick={(e) => {
                         e.stopPropagation()
                         moveUp(index)
@@ -315,6 +396,7 @@ export function DoctorDashboard() {
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={(patient.status?.triage_status || "AWAITING_DOCTOR") !== "AWAITING_DOCTOR"}
                       onClick={(e) => {
                         e.stopPropagation()
                         moveDown(index)
@@ -352,87 +434,175 @@ export function DoctorDashboard() {
 
       {view === "analytics" && (
         <div className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={exportAnalytics}>Export CSV</Button>
-            <Button variant="outline" onClick={() => window.print()}>
-              Print
-            </Button>
-          </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Total Patients</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold">{patients.length}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">High Risk</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold text-red-600">
-                {patients.filter((p) => (p.ai?.risk_score ?? 0) >= 7).length}
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Pending Review</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold text-amber-600">
-                {patients.filter((p) => p.status?.triage_status === "AWAITING_DOCTOR").length}
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Cases by Status</CardTitle>
-            </CardHeader>
-            <CardContent className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={statusCounts}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="value" fill="#0f766e" />
-                </BarChart>
-              </ResponsiveContainer>
+          <Card className="border-none bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-slate-100 shadow-lg">
+            <CardContent className="p-5">
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">Clinical Analytics Workspace</h2>
+                  <p className="text-sm text-slate-300">
+                    Charts and CSV export are based on the active filters above.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-white/15 px-3 py-1">Filtered cohort: {sorted.length}</span>
+                  <span className="rounded-full bg-white/15 px-3 py-1">All patients: {patients.length}</span>
+                  <span className="rounded-full bg-white/15 px-3 py-1">Status: {statusFilter}</span>
+                  <span className="rounded-full bg-white/15 px-3 py-1">Date: {dateFilterLabel}</span>
+                </div>
+              </div>
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="border-slate-200 bg-white shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Risk Distribution</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Filter className="h-4 w-4" />
+                Filtered Export
+              </CardTitle>
             </CardHeader>
-            <CardContent className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={riskBuckets}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="value" fill="#2563eb" />
-                </BarChart>
-              </ResponsiveContainer>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Export includes only patients visible under your current search/date/status filters.
+              </p>
+              <div className="flex flex-wrap gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={csvOnlyHighRisk}
+                    onChange={(e) => setCsvOnlyHighRisk(e.target.checked)}
+                  />
+                  Only high-risk cases in CSV
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={csvIncludeSummary}
+                    onChange={(e) => setCsvIncludeSummary(e.target.checked)}
+                  />
+                  Include AI summary text
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={csvIncludeCoordinates}
+                    onChange={(e) => setCsvIncludeCoordinates(e.target.checked)}
+                  />
+                  Include coordinates
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button onClick={exportAnalytics} className="gap-2">
+                  <Download className="h-4 w-4" />
+                  Export Filtered CSV ({csvRows.length} rows)
+                </Button>
+                <Button variant="outline" onClick={() => window.print()} className="gap-2">
+                  <Printer className="h-4 w-4" />
+                  Print
+                </Button>
+              </div>
             </CardContent>
           </Card>
 
-          <Card>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <Card className="border-blue-100 bg-gradient-to-br from-blue-50 to-white">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-blue-900 flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  Filtered Patients
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-3xl font-semibold text-blue-700">{analyticsPatients.length}</CardContent>
+            </Card>
+            <Card className="border-red-100 bg-gradient-to-br from-red-50 to-white">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-red-900 flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4" />
+                  High Risk
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-3xl font-semibold text-red-700">{highRiskPatients.length}</CardContent>
+            </Card>
+            <Card className="border-amber-100 bg-gradient-to-br from-amber-50 to-white">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-amber-900 flex items-center gap-2">
+                  <Clock3 className="h-4 w-4" />
+                  Pending Review
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-3xl font-semibold text-amber-700">
+                {analyticsPatients.filter((p) => p.status?.triage_status === "AWAITING_DOCTOR").length}
+              </CardContent>
+            </Card>
+            <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50 to-white">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-emerald-900">Urgent Overrides</CardTitle>
+              </CardHeader>
+              <CardContent className="text-3xl font-semibold text-emerald-700">
+                {analyticsPatients.filter((p) => p.doctor_priority).length}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Cases by Status (Filtered)</CardTitle>
+              </CardHeader>
+              <CardContent className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={statusCounts} margin={{ top: 8, right: 8, left: 0, bottom: 16 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#dbe2ea" />
+                    <XAxis dataKey="name" tick={{ fontSize: 12 }} interval={0} angle={-20} textAnchor="end" height={56} />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                    <Tooltip cursor={{ fill: "#f8fafc" }} />
+                    <Bar dataKey="value" fill="#0f766e" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Risk Distribution (Filtered)</CardTitle>
+              </CardHeader>
+              <CardContent className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={riskBuckets} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#dbe2ea" />
+                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+                    <Tooltip cursor={{ fill: "#f8fafc" }} />
+                    <Bar dataKey="value" radius={[8, 8, 0, 0]}>
+                      {riskBuckets.map((entry) => (
+                        <Cell
+                          key={entry.name}
+                          fill={entry.name === "High" ? "#ef4444" : entry.name === "Medium" ? "#f59e0b" : "#10b981"}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="border-slate-200 shadow-sm">
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">High Risk Patients</CardTitle>
+              <CardTitle className="text-base">High Risk Patients (Filtered)</CardTitle>
             </CardHeader>
             <CardContent>
               {highRiskPatients.length === 0 && (
-                <div className="text-sm text-muted-foreground">No high risk patients</div>
+                <div className="text-sm text-muted-foreground">No high risk patients in current filter selection.</div>
               )}
               {highRiskPatients.length > 0 && (
-                <div className="divide-y rounded-md border">
+                <div className="divide-y rounded-md border bg-white">
                   {highRiskPatients.map((p) => (
                     <div key={p.id} className="flex items-center justify-between p-3">
                       <div>
-                        <div className="text-sm font-medium">{p.demographics?.name || "Unknown"}</div>
+                        <div className="text-sm font-medium">{normalizeName(p.demographics?.name)}</div>
                         <div className="text-xs text-muted-foreground">
-                          Sample: {p.sample_id || "-"} • Score: {p.ai?.risk_score ?? 0}
+                          Sample: {p.sample_id || "-"} • Score: {p.ai?.risk_score ?? 0} • Status:{" "}
+                          {toStatusLabel(p.status?.triage_status)}
                         </div>
                       </div>
                       <Button
@@ -440,7 +610,7 @@ export function DoctorDashboard() {
                         variant="outline"
                         onClick={() => router.push(`/doctor/patient/${p.id}`)}
                       >
-                        View
+                        Open Profile
                       </Button>
                     </div>
                   ))}

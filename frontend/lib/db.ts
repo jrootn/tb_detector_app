@@ -39,13 +39,15 @@ export async function getAllPatients() {
 export async function seedPatientsIfEmpty(patients: PatientRecord[]) {
   const count = await db.patients.count()
   if (count === 0) {
-    await db.patients.bulkAdd(patients)
+    await db.patients.bulkPut(patients)
   }
 }
 
 export async function savePatients(patients: PatientRecord[]) {
-  await db.patients.clear()
-  await db.patients.bulkAdd(patients)
+  await db.transaction("rw", db.patients, async () => {
+    await db.patients.clear()
+    await db.patients.bulkPut(patients)
+  })
 }
 
 export async function upsertPatient(patient: PatientRecord) {

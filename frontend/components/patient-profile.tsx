@@ -209,7 +209,6 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
             <div key={stage.key} className="relative group">
               <button
                 type="button"
-                title={stage.help}
                 onClick={() => setActiveHelpStage((prev) => (prev === stage.key ? null : stage.key))}
                 className={`w-full rounded-md border px-2.5 py-2 text-center text-xs font-medium ${
                   stage.done
