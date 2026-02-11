@@ -136,6 +136,12 @@ interface Translations {
   doctorReviewed: string
   testScheduledLabel: string
   testCompleted: string
+  collectedHelp: string
+  syncedHelp: string
+  aiAnalysisDoneHelp: string
+  doctorReviewedHelp: string
+  testScheduledHelp: string
+  testCompletedHelp: string
   
   // Status
   awaitingDoctor: string
@@ -276,6 +282,12 @@ const translations: Record<Language, Translations> = {
     doctorReviewed: "Doctor Review",
     testScheduledLabel: "Test Scheduled",
     testCompleted: "Test Done",
+    collectedHelp: "Patient form and sample were collected on device.",
+    syncedHelp: "Record and media were synced to cloud.",
+    aiAnalysisDoneHelp: "AI processing completed and risk summary is ready.",
+    doctorReviewedHelp: "Doctor reviewed case and added decision/notes.",
+    testScheduledHelp: "Diagnostic test date or lab assignment exists.",
+    testCompletedHelp: "Lab/testing workflow has been completed.",
     
     awaitingDoctor: "Awaiting Doctor",
     testPending: "Test Pending",
@@ -411,6 +423,12 @@ const translations: Record<Language, Translations> = {
     doctorReviewed: "डॉक्टर समीक्षा",
     testScheduledLabel: "टेस्ट निर्धारित",
     testCompleted: "टेस्ट पूरा",
+    collectedHelp: "मरीज का फॉर्म और सैंपल डिवाइस पर संग्रहित हो गया है।",
+    syncedHelp: "रिकॉर्ड और मीडिया क्लाउड पर सिंक हो गए हैं।",
+    aiAnalysisDoneHelp: "एआई प्रोसेसिंग पूरी हो गई और जोखिम सारांश तैयार है।",
+    doctorReviewedHelp: "डॉक्टर ने केस देखकर निर्णय/नोट्स जोड़े हैं।",
+    testScheduledHelp: "टेस्ट की तारीख या लैब असाइनमेंट सेट है।",
+    testCompletedHelp: "लैब/टेस्टिंग प्रक्रिया पूरी हो चुकी है।",
     
     awaitingDoctor: "डॉक्टर की प्रतीक्षा",
     testPending: "परीक्षण लंबित",

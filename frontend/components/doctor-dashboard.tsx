@@ -18,11 +18,7 @@ import {
 } from "recharts"
 import { useRouter } from "next/navigation"
 
-import "leaflet/dist/leaflet.css"
-
-const MapContainer = dynamic(() => import("react-leaflet").then((m) => m.MapContainer), { ssr: false })
-const TileLayer = dynamic(() => import("react-leaflet").then((m) => m.TileLayer), { ssr: false })
-const CircleMarker = dynamic(() => import("react-leaflet").then((m) => m.CircleMarker), { ssr: false })
+const DoctorHeatmap = dynamic(() => import("@/components/doctor-heatmap"), { ssr: false })
 
 interface PatientRecord {
   id: string
@@ -46,7 +42,6 @@ export function DoctorDashboard() {
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [search, setSearch] = useState("")
   const [isOnline, setIsOnline] = useState(true)
-  const [mapKey, setMapKey] = useState(0)
 
   useEffect(() => {
     setMounted(true)
@@ -74,12 +69,6 @@ export function DoctorDashboard() {
       window.removeEventListener("offline", handler)
     }
   }, [])
-
-  useEffect(() => {
-    if (view === "map" && isOnline) {
-      setMapKey((prev) => prev + 1)
-    }
-  }, [view, isOnline])
 
   const filtered = useMemo(() => {
     const now = new Date()
@@ -357,32 +346,7 @@ export function DoctorDashboard() {
 
       {view === "map" && mounted && isOnline && (
         <div className="h-[70vh] w-full overflow-hidden rounded-lg border">
-          <MapContainer
-            key={`map-${mapKey}`}
-            id={`map-${mapKey}`}
-            center={[21.1458, 79.0882]}
-            zoom={11}
-            className="h-full w-full"
-          >
-            <TileLayer
-              attribution='&copy; OpenStreetMap contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            {filtered
-              .filter((p) => p.gps?.lat && p.gps?.lng)
-              .map((p) => {
-                const score = p.ai?.risk_score ?? 0
-                const color = score >= 8 ? "#ef4444" : "#10b981"
-                return (
-                  <CircleMarker
-                    key={p.id}
-                    center={[p.gps!.lat!, p.gps!.lng!]}
-                    radius={8}
-                    pathOptions={{ color, fillColor: color, fillOpacity: 0.7 }}
-                  />
-                )
-              })}
-          </MapContainer>
+          <DoctorHeatmap patients={filtered} />
         </div>
       )}
 

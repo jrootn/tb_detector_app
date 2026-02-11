@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useLanguage } from "@/lib/language-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -27,6 +27,7 @@ interface PatientProfileProps {
 
 export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProfileProps) {
   const { t, language } = useLanguage()
+  const [activeHelpStage, setActiveHelpStage] = useState<string | null>(null)
 
   const getRiskBadgeStyle = (level: RiskLevel) => {
     switch (level) {
@@ -111,13 +112,44 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
   }
   
   const stages = [
-    { label: t.collected, done: true },
-    { label: t.synced, done: !patient.needsSync },
-    { label: t.aiAnalysisDone, done: Boolean(patient.medGemmaReasoning || patient.hearAudioScore) },
-    { label: t.doctorReviewed, done: patient.status !== "awaitingDoctor" },
-    { label: t.testScheduledLabel, done: Boolean(patient.testScheduled || patient.status === "testPending" || patient.status === "underTreatment" || patient.status === "cleared") },
-    { label: t.testCompleted, done: patient.status === "underTreatment" || patient.status === "cleared" },
+    { key: "collected", label: t.collected, help: t.collectedHelp, done: true },
+    { key: "synced", label: t.synced, help: t.syncedHelp, done: !patient.needsSync },
+    {
+      key: "ai",
+      label: t.aiAnalysisDone,
+      help: t.aiAnalysisDoneHelp,
+      done: Boolean(patient.medGemmaReasoning || patient.hearAudioScore),
+    },
+    {
+      key: "doctor",
+      label: t.doctorReviewed,
+      help: t.doctorReviewedHelp,
+      done: patient.status !== "awaitingDoctor",
+    },
+    {
+      key: "scheduled",
+      label: t.testScheduledLabel,
+      help: t.testScheduledHelp,
+      done: Boolean(
+        patient.testScheduled ||
+          patient.status === "testPending" ||
+          patient.status === "underTreatment" ||
+          patient.status === "cleared"
+      ),
+    },
+    {
+      key: "completed",
+      label: t.testCompleted,
+      help: t.testCompletedHelp,
+      done: patient.status === "underTreatment" || patient.status === "cleared",
+    },
   ]
+
+  useEffect(() => {
+    if (!activeHelpStage) return
+    const timer = setTimeout(() => setActiveHelpStage(null), 2500)
+    return () => clearTimeout(timer)
+  }, [activeHelpStage])
 
   // Helper to format cough duration (now in days)
   const formatCoughDuration = (days?: number) => {
@@ -174,13 +206,26 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
 
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           {stages.map((stage) => (
-            <div
-              key={stage.label}
-              className={`rounded-md border px-2.5 py-2 text-center text-xs font-medium ${
-                stage.done ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-muted text-muted-foreground"
-              }`}
-            >
-              {stage.label}
+            <div key={stage.key} className="relative group">
+              <button
+                type="button"
+                title={stage.help}
+                onClick={() => setActiveHelpStage((prev) => (prev === stage.key ? null : stage.key))}
+                className={`w-full rounded-md border px-2.5 py-2 text-center text-xs font-medium ${
+                  stage.done
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {stage.label}
+              </button>
+              <div
+                className={`pointer-events-none absolute left-1/2 top-full z-20 mt-1 w-44 -translate-x-1/2 rounded-md bg-foreground px-2 py-1 text-[10px] text-background shadow-md ${
+                  activeHelpStage === stage.key ? "block" : "hidden group-hover:block group-focus-within:block"
+                }`}
+              >
+                {stage.help}
+              </div>
             </div>
           ))}
         </div>

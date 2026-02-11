@@ -123,6 +123,7 @@ export async function syncUploads(userId: string) {
       await updateDoc(patientRef, {
         lab_results: {
           report_uri: url,
+          report_path: path,
           uploaded_at: uploadedAt,
           uploaded_by: userId,
         },
@@ -132,6 +133,7 @@ export async function syncUploads(userId: string) {
         doctor_files: arrayUnion({
           name: upload.fileName,
           url,
+          storage_path: path,
           uploaded_at: uploadedAt,
         }),
       })
@@ -141,6 +143,7 @@ export async function syncUploads(userId: string) {
           file_name: upload.fileName,
           mime_type: upload.mimeType,
           storage_uri: url,
+          storage_path: path,
           uploaded_at: uploadedAt,
         }),
       })

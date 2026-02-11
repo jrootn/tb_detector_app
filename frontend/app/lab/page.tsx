@@ -13,6 +13,7 @@ export default function LabPage() {
   const router = useRouter()
   const [ready, setReady] = useState(false)
   const [isOnline, setIsOnline] = useState(true)
+  const [labName, setLabName] = useState("Lab")
   useAutoSync(true)
 
   useEffect(() => {
@@ -27,6 +28,7 @@ export default function LabPage() {
           router.replace("/login")
           return
         }
+        setLabName(snap.data()?.name || "Lab")
         setReady(true)
       } catch (error) {
         router.replace("/login")
@@ -52,7 +54,7 @@ export default function LabPage() {
   return (
     <div>
       <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-card px-4 py-3">
-        <div className="text-sm font-medium">Lab Queue</div>
+        <div className="text-sm font-medium">{labName} Queue</div>
         <div className="flex items-center gap-2">
           <span className={`text-xs ${isOnline ? "text-emerald-600" : "text-amber-600"}`}>
             {isOnline ? "Online" : "Offline"}

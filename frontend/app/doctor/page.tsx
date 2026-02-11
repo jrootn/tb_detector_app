@@ -13,6 +13,7 @@ export default function DoctorPage() {
   const router = useRouter()
   const [ready, setReady] = useState(false)
   const [isOnline, setIsOnline] = useState(true)
+  const [doctorName, setDoctorName] = useState("Doctor")
 
   useAutoSync(true)
 
@@ -28,6 +29,7 @@ export default function DoctorPage() {
           router.replace("/login")
           return
         }
+        setDoctorName(snap.data()?.name || "Doctor")
         setReady(true)
       } catch (error) {
         router.replace("/login")
@@ -53,7 +55,7 @@ export default function DoctorPage() {
   return (
     <div>
       <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-card px-4 py-3">
-        <div className="text-sm font-medium">Doctor Dashboard</div>
+        <div className="text-sm font-medium">Dr. {doctorName.replace(/^Dr\.\s*/i, "")} Dashboard</div>
         <div className="flex items-center gap-2">
           <span className={`text-xs ${isOnline ? "text-emerald-600" : "text-amber-600"}`}>
             {isOnline ? "Online" : "Offline"}

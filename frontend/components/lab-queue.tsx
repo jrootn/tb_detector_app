@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useState } from "react"
 import { collection, doc, updateDoc, onSnapshot, query } from "firebase/firestore"
 import { db, storage, auth } from "@/lib/firebase"
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage"
+import { ref, uploadBytes } from "firebase/storage"
 import { addUpload } from "@/lib/db"
+import { resolveStorageUrl } from "@/lib/storage-utils"
 
 interface PatientRecord {
   id: string
@@ -187,13 +188,16 @@ export function LabQueue() {
                       try {
                         setUploadingId(p.id)
                         const userId = auth.currentUser?.uid || "lab"
-                        const path = `lab_results/${userId}/${p.id}/${Date.now()}-${file.name}`
+                        const safeName = `${Date.now()}-${file.name}`.replace(/\s+/g, "_")
+                        const path = `lab_results/${userId}/${p.id}/${safeName}`
                         const fileRef = ref(storage, path)
+                        await auth.currentUser?.getIdToken(true)
                         await uploadBytes(fileRef, file, { contentType: file.type || "application/pdf" })
-                        const url = await getDownloadURL(fileRef)
+                        const url = await resolveStorageUrl(path)
                         await updateDoc(doc(db, "patients", p.id), {
                           lab_results: {
                             report_uri: url,
+                            report_path: path,
                             uploaded_at: new Date().toISOString(),
                             uploaded_by: userId,
                           },

@@ -35,14 +35,21 @@ else:
 
 db = firestore.client()
 
-UPLOAD_DUMMY_MEDIA = os.environ.get("UPLOAD_DUMMY_MEDIA") == "1"
+UPLOAD_DUMMY_MEDIA = os.environ.get("UPLOAD_DUMMY_MEDIA", "1") == "1"
 STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET") or os.environ.get("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET")
 
 
 def get_storage_bucket():
-    if not UPLOAD_DUMMY_MEDIA or not STORAGE_BUCKET:
+    if not UPLOAD_DUMMY_MEDIA:
         return None
-    client = storage.Client.from_service_account_json(cred_path)
+    if not STORAGE_BUCKET:
+        print("Dummy media upload skipped: FIREBASE_STORAGE_BUCKET/NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET is not set.")
+        return None
+    if cred_path:
+        client = storage.Client.from_service_account_json(cred_path)
+    else:
+        client = storage.Client()
+    print(f"Uploading dummy media to bucket: {STORAGE_BUCKET}")
     return client.bucket(STORAGE_BUCKET)
 
 

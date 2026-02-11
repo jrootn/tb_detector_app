@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { doc, getDoc, updateDoc } from "firebase/firestore"
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage"
-import { db, storage } from "@/lib/firebase"
+import { ref, uploadBytes } from "firebase/storage"
+import { auth, db, storage } from "@/lib/firebase"
 import { addUpload } from "@/lib/db"
+import { resolveStorageUrl } from "@/lib/storage-utils"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -17,14 +18,14 @@ interface PatientRecord {
   clinical?: { cough_nature?: string; fever_history?: string; other_observations?: string }
   symptoms?: { symptom_code: string; severity?: string; duration_days?: number }[]
   ai?: { risk_score?: number; medgemini_summary?: string }
-  audio?: { storage_uri?: string; file_name?: string }[]
+  audio?: { storage_uri?: string; storage_path?: string; download_url?: string; file_name?: string }[]
   status?: { triage_status?: string }
   doctor_notes?: string
   doctor_instructions?: string
   prescription?: string
   sample_id?: string
-  doctor_files?: { name: string; url: string; uploaded_at: string }[]
-  lab_results?: { report_uri?: string; uploaded_at?: string }
+  doctor_files?: { name: string; url?: string; storage_path?: string; uploaded_at: string }[]
+  lab_results?: { report_uri?: string; report_path?: string; uploaded_at?: string }
 }
 
 export default function DoctorPatientPage() {
@@ -37,6 +38,7 @@ export default function DoctorPatientPage() {
   const [uploading, setUploading] = useState(false)
   const [resolvedAudio, setResolvedAudio] = useState<Record<number, string>>({})
   const [resolvedReport, setResolvedReport] = useState<string | null>(null)
+  const [resolvedDoctorFiles, setResolvedDoctorFiles] = useState<Record<number, string>>({})
 
   useEffect(() => {
     const load = async () => {
@@ -56,25 +58,26 @@ export default function DoctorPatientPage() {
         const next: Record<number, string> = {}
         await Promise.all(
           data.audio.map(async (a, idx) => {
-            if (!a.storage_uri) return
-            try {
-              const url = await getDownloadURL(ref(storage, a.storage_uri))
-              next[idx] = url
-            } catch {
-              next[idx] = a.storage_uri
-            }
+            const candidate = a.download_url || a.storage_uri || a.storage_path
+            const url = await resolveStorageUrl(candidate)
+            if (url) next[idx] = url
           })
         )
         setResolvedAudio(next)
       }
 
-      if (data.lab_results?.report_uri) {
-        try {
-          const url = await getDownloadURL(ref(storage, data.lab_results.report_uri))
-          setResolvedReport(url)
-        } catch {
-          setResolvedReport(data.lab_results.report_uri)
-        }
+      const reportCandidate = data.lab_results?.report_uri || data.lab_results?.report_path
+      setResolvedReport(await resolveStorageUrl(reportCandidate))
+
+      if (data.doctor_files) {
+        const next: Record<number, string> = {}
+        await Promise.all(
+          data.doctor_files.map(async (f, idx) => {
+            const url = await resolveStorageUrl(f.url || f.storage_path)
+            if (url) next[idx] = url
+          })
+        )
+        setResolvedDoctorFiles(next)
       }
     }
     load()
@@ -122,22 +125,30 @@ export default function DoctorPatientPage() {
       return
     }
     setUploading(true)
-    const fileRef = ref(storage, `doctor_uploads/${patient.id}/${Date.now()}-${file.name}`)
-    await uploadBytes(fileRef, file)
-    const url = await getDownloadURL(fileRef)
+    try {
+      const safeName = `${Date.now()}-${file.name}`.replace(/\s+/g, "_")
+      const path = `doctor_uploads/${patient.id}/${safeName}`
+      const fileRef = ref(storage, path)
+      await auth.currentUser?.getIdToken(true)
+      await uploadBytes(fileRef, file)
+      const url = await resolveStorageUrl(path)
 
-    const existing = patient.doctor_files || []
-    const next = [
-      ...existing,
-      { name: file.name, url, uploaded_at: new Date().toISOString() },
-    ]
+      const existing = patient.doctor_files || []
+      const next = [
+        ...existing,
+        { name: file.name, url: url || undefined, storage_path: path, uploaded_at: new Date().toISOString() },
+      ]
 
-    await updateDoc(doc(db, "patients", patient.id), {
-      doctor_files: next,
-    })
+      await updateDoc(doc(db, "patients", patient.id), {
+        doctor_files: next,
+      })
 
-    setPatient((prev) => (prev ? { ...prev, doctor_files: next } : prev))
-    setUploading(false)
+      setPatient((prev) => (prev ? { ...prev, doctor_files: next } : prev))
+    } catch (error) {
+      alert("Upload failed. Check storage rules and role mapping for this user.")
+    } finally {
+      setUploading(false)
+    }
   }
 
   if (!patient) return <div className="p-6">Loading...</div>
@@ -192,20 +203,19 @@ export default function DoctorPatientPage() {
         </CardContent>
       </Card>
 
-      {patient.lab_results?.report_uri && (
+      {(patient.lab_results?.report_uri || patient.lab_results?.report_path) && (
         <Card>
           <CardHeader>
             <CardTitle>Lab Report</CardTitle>
           </CardHeader>
           <CardContent>
-            <a
-              href={resolvedReport || patient.lab_results.report_uri}
-              className="text-sm text-blue-600 underline"
-              target="_blank"
-              rel="noreferrer"
-            >
-              View Report
-            </a>
+            {resolvedReport ? (
+              <a href={resolvedReport} className="text-sm text-blue-600 underline" target="_blank" rel="noreferrer">
+                View Report
+              </a>
+            ) : (
+              <div className="text-sm text-muted-foreground">Report exists but URL could not be resolved.</div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -257,10 +267,13 @@ export default function DoctorPatientPage() {
               {patient.doctor_files.map((f, idx) => (
                 <a
                   key={idx}
-                  href={f.url}
-                  className="text-sm text-blue-600 underline"
+                  href={resolvedDoctorFiles[idx] || f.url || ""}
+                  className="text-sm text-blue-600 underline disabled:pointer-events-none disabled:opacity-50"
                   target="_blank"
                   rel="noreferrer"
+                  onClick={(e) => {
+                    if (!resolvedDoctorFiles[idx] && !f.url) e.preventDefault()
+                  }}
                 >
                   {f.name}
                 </a>
