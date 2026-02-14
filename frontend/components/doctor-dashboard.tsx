@@ -39,6 +39,15 @@ function normalizeName(name?: string) {
   return name.replace(/\s+\d+$/, "")
 }
 
+function normalizeStatusCode(status?: string): string {
+  if (!status) return "AWAITING_DOCTOR"
+  const normalized = status.toUpperCase()
+  if (normalized === "AWAITINGDOCTOR") return "AWAITING_DOCTOR"
+  if (normalized === "TESTPENDING") return "TEST_PENDING"
+  if (normalized === "UNDERTREATMENT") return "UNDER_TREATMENT"
+  return normalized
+}
+
 export function DoctorDashboard() {
   const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
@@ -83,7 +92,7 @@ export function DoctorDashboard() {
   const filtered = useMemo(() => {
     const now = new Date()
     return patients.filter((p) => {
-      if (statusFilter !== "all" && p.status?.triage_status !== statusFilter) {
+      if (statusFilter !== "all" && normalizeStatusCode(p.status?.triage_status) !== statusFilter) {
         return false
       }
 
@@ -124,8 +133,8 @@ export function DoctorDashboard() {
       const aPriority = a.doctor_priority ? 1 : 0
       const bPriority = b.doctor_priority ? 1 : 0
       if (aPriority !== bPriority) return bPriority - aPriority
-      const aAwaiting = (a.status?.triage_status || "AWAITING_DOCTOR") === "AWAITING_DOCTOR"
-      const bAwaiting = (b.status?.triage_status || "AWAITING_DOCTOR") === "AWAITING_DOCTOR"
+      const aAwaiting = normalizeStatusCode(a.status?.triage_status) === "AWAITING_DOCTOR"
+      const bAwaiting = normalizeStatusCode(b.status?.triage_status) === "AWAITING_DOCTOR"
       if (aAwaiting !== bAwaiting) return aAwaiting ? -1 : 1
       const aHasRank = typeof a.doctor_rank === "number"
       const bHasRank = typeof b.doctor_rank === "number"
@@ -196,7 +205,7 @@ export function DoctorDashboard() {
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     analyticsPatients.forEach((p) => {
-      const status = toStatusLabel(p.status?.triage_status)
+      const status = toStatusLabel(normalizeStatusCode(p.status?.triage_status))
       counts[status] = (counts[status] || 0) + 1
     })
     return Object.entries(counts).map(([name, value]) => ({ name, value }))
@@ -263,7 +272,7 @@ export function DoctorDashboard() {
         normalizeName(p.demographics?.name),
         p.sample_id || "-",
         p.ai?.risk_score ?? 0,
-        toStatusLabel(p.status?.triage_status),
+        toStatusLabel(normalizeStatusCode(p.status?.triage_status)),
         p.doctor_priority ? "urgent" : "normal",
         p.doctor_rank ?? 0,
       ]
@@ -370,7 +379,7 @@ export function DoctorDashboard() {
                   <span className="flex items-center gap-2">
                     {normalizeName(patient.demographics?.name)}
                     <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(patient.status?.triage_status)}`}>
-                      {toStatusLabel(patient.status?.triage_status)}
+                      {toStatusLabel(normalizeStatusCode(patient.status?.triage_status))}
                     </span>
                   </span>
                   <span className={`text-sm ${patient.ai?.risk_score && patient.ai.risk_score >= 8 ? "text-red-600" : "text-emerald-600"}`}>
@@ -385,7 +394,7 @@ export function DoctorDashboard() {
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={(patient.status?.triage_status || "AWAITING_DOCTOR") !== "AWAITING_DOCTOR"}
+                      disabled={normalizeStatusCode(patient.status?.triage_status) !== "AWAITING_DOCTOR"}
                       onClick={(e) => {
                         e.stopPropagation()
                         moveUp(index)
@@ -396,7 +405,7 @@ export function DoctorDashboard() {
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={(patient.status?.triage_status || "AWAITING_DOCTOR") !== "AWAITING_DOCTOR"}
+                      disabled={normalizeStatusCode(patient.status?.triage_status) !== "AWAITING_DOCTOR"}
                       onClick={(e) => {
                         e.stopPropagation()
                         moveDown(index)
@@ -530,7 +539,7 @@ export function DoctorDashboard() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="text-3xl font-semibold text-amber-700">
-                {analyticsPatients.filter((p) => p.status?.triage_status === "AWAITING_DOCTOR").length}
+                {analyticsPatients.filter((p) => normalizeStatusCode(p.status?.triage_status) === "AWAITING_DOCTOR").length}
               </CardContent>
             </Card>
             <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50 to-white">
@@ -602,7 +611,7 @@ export function DoctorDashboard() {
                         <div className="text-sm font-medium">{normalizeName(p.demographics?.name)}</div>
                         <div className="text-xs text-muted-foreground">
                           Sample: {p.sample_id || "-"} • Score: {p.ai?.risk_score ?? 0} • Status:{" "}
-                          {toStatusLabel(p.status?.triage_status)}
+                          {toStatusLabel(normalizeStatusCode(p.status?.triage_status))}
                         </div>
                       </div>
                       <Button

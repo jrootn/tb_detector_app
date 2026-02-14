@@ -342,6 +342,7 @@ export function DashboardScreen({
                 <TableHeader>
                   <TableRow>
                     <TableHead className="font-semibold">{t.name}</TableHead>
+                    <TableHead className="font-semibold">Sample ID</TableHead>
                     <TableHead className="font-semibold">{t.village}</TableHead>
                     <TableHead className="font-semibold">{t.collectionDate}</TableHead>
                     <TableHead className="font-semibold">{t.riskScore}</TableHead>
@@ -357,6 +358,9 @@ export function DashboardScreen({
                     >
                       <TableCell className="font-medium">
                         {language === "en" ? patient.name : patient.nameHi}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {patient.sampleId || "-"}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {language === "en" ? patient.village : patient.villageHi}
@@ -378,7 +382,7 @@ export function DashboardScreen({
                   ))}
                   {filteredPatients.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                         {language === "en" ? "No patients found" : "कोई मरीज़ नहीं मिला"}
                       </TableCell>
                     </TableRow>

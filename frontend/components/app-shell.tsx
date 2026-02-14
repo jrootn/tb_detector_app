@@ -9,6 +9,7 @@ import { PatientProfile } from "./patient-profile"
 import { PriorityView } from "./priority-view"
 import { mockPatients, type Patient } from "@/lib/mockData"
 import { getAllPatients, savePatients, seedPatientsIfEmpty, getPendingUploadCount } from "@/lib/db"
+import { syncData } from "@/lib/sync"
 
 type Screen = "login" | "dashboard" | "screening" | "profile" | "priority"
 
@@ -194,6 +195,11 @@ export function AppShell({
 
   const handleScreeningComplete = useCallback((newPatient: Patient) => {
     setPatients((prev) => [newPatient, ...prev])
+    if (navigator.onLine) {
+      syncData().catch((error) => {
+        console.warn("Auto-sync after screening failed", error)
+      })
+    }
     setCurrentScreen("dashboard")
   }, [])
 

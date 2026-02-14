@@ -1,11 +1,10 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { collection, doc, updateDoc, onSnapshot, query } from "firebase/firestore"
-import { db, storage, auth } from "@/lib/firebase"
-import { ref, uploadBytes } from "firebase/storage"
+import { collection, onSnapshot, query } from "firebase/firestore"
+import { db, auth } from "@/lib/firebase"
 import { addUpload } from "@/lib/db"
-import { resolveStorageUrl } from "@/lib/storage-utils"
+import { syncUploads } from "@/lib/sync"
 
 interface PatientRecord {
   id: string
@@ -17,6 +16,15 @@ interface PatientRecord {
   doctor_rank?: number
   sample_id?: string
   asha_phone_number?: string
+}
+
+function normalizeStatusCode(status?: string): string {
+  if (!status) return "AWAITING_DOCTOR"
+  const normalized = status.toUpperCase()
+  if (normalized === "AWAITINGDOCTOR") return "AWAITING_DOCTOR"
+  if (normalized === "TESTPENDING") return "TEST_PENDING"
+  if (normalized === "UNDERTREATMENT") return "UNDER_TREATMENT"
+  return normalized
 }
 
 export function LabQueue() {
@@ -61,8 +69,9 @@ export function LabQueue() {
       if (score < minScore) return false
 
       const status = p.status?.triage_status
-      if (filter === "queue" && status === "LAB_DONE") return false
-      if (filter === "done" && status !== "LAB_DONE") return false
+      const statusCode = normalizeStatusCode(status)
+      if (filter === "queue" && statusCode === "LAB_DONE") return false
+      if (filter === "done" && statusCode !== "LAB_DONE") return false
 
       if (!p.created_at_offline) return true
       const created = new Date(p.created_at_offline)
@@ -159,7 +168,7 @@ export function LabQueue() {
                 <td className={`p-3 ${p.ai?.risk_score && p.ai.risk_score >= 8 ? "text-red-600" : "text-emerald-600"}`}>
                   {p.ai?.risk_score ?? 0}
                 </td>
-                <td className="p-3">{p.status?.triage_status || "-"}</td>
+                <td className="p-3">{normalizeStatusCode(p.status?.triage_status)}</td>
                 <td className="p-3">{p.asha_phone_number || "-"}</td>
                 <td className="p-3">
                   <input
@@ -170,40 +179,36 @@ export function LabQueue() {
                       const file = e.target.files?.[0]
                       if (!file) return
 
-                      if (!navigator.onLine) {
+                      try {
+                        setUploadingId(p.id)
                         await addUpload({
                           id: `${Date.now()}-${file.name}`,
                           patientId: p.id,
                           role: "LAB_TECH",
                           kind: "report",
                           fileName: file.name,
-                          mimeType: file.type || "application/pdf",
+                          mimeType: file.type || "application/octet-stream",
                           blob: file,
                           createdAt: new Date().toISOString(),
                         })
-                        alert("Saved for sync when online.")
-                        return
-                      }
-
-                      try {
-                        setUploadingId(p.id)
-                        const userId = auth.currentUser?.uid || "lab"
-                        const safeName = `${Date.now()}-${file.name}`.replace(/\s+/g, "_")
-                        const path = `lab_results/${userId}/${p.id}/${safeName}`
-                        const fileRef = ref(storage, path)
-                        await auth.currentUser?.getIdToken(true)
-                        await uploadBytes(fileRef, file, { contentType: file.type || "application/pdf" })
-                        const url = await resolveStorageUrl(path)
-                        await updateDoc(doc(db, "patients", p.id), {
-                          lab_results: {
-                            report_uri: url,
-                            report_path: path,
-                            uploaded_at: new Date().toISOString(),
-                            uploaded_by: userId,
-                          },
-                          "status.triage_status": "LAB_DONE",
-                        })
-                        alert("Report uploaded.")
+                        if (!navigator.onLine) {
+                          alert("Saved for sync when online.")
+                          return
+                        }
+                        const userId = auth.currentUser?.uid
+                        if (!userId) {
+                          alert("User session not ready. Please retry.")
+                          return
+                        }
+                        const result = await syncUploads(userId)
+                        if (result.failed > 0) {
+                          alert("Report queued, but sync failed for one or more files. Please retry.")
+                        } else {
+                          alert("Report uploaded.")
+                        }
+                      } catch (error) {
+                        const message = error instanceof Error ? error.message : "Upload failed"
+                        alert(message)
                       } finally {
                         setUploadingId(null)
                       }

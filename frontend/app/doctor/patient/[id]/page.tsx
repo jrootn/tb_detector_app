@@ -1,12 +1,12 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { doc, getDoc, updateDoc } from "firebase/firestore"
-import { ref, uploadBytes } from "firebase/storage"
-import { auth, db, storage } from "@/lib/firebase"
+import { auth, db } from "@/lib/firebase"
 import { addUpload } from "@/lib/db"
 import { resolveStorageUrl } from "@/lib/storage-utils"
+import { syncUploads } from "@/lib/sync"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -39,6 +39,15 @@ function normalizeName(name?: string) {
   return name.replace(/\s+\d+$/, "")
 }
 
+function normalizeStatusCode(status?: string): string {
+  if (!status) return AWAITING_DOCTOR
+  const normalized = status.toUpperCase()
+  if (normalized === "AWAITINGDOCTOR") return AWAITING_DOCTOR
+  if (normalized === "TESTPENDING") return TEST_PENDING
+  if (normalized === "UNDERTREATMENT") return UNDER_TREATMENT
+  return normalized
+}
+
 export default function DoctorPatientPage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
@@ -52,52 +61,53 @@ export default function DoctorPatientPage() {
   const [resolvedReport, setResolvedReport] = useState<string | null>(null)
   const [resolvedDoctorFiles, setResolvedDoctorFiles] = useState<Record<number, string>>({})
 
-  useEffect(() => {
-    const load = async () => {
-      const id = params.id
-      const snap = await getDoc(doc(db, "patients", id))
-      if (!snap.exists()) {
-        router.replace("/doctor")
-        return
-      }
-      const data = snap.data() as PatientRecord
-      setPatient({ id, ...data })
-      setNote(data.doctor_notes || "")
-      setInstruction(data.doctor_instructions || "")
-      setPrescription(data.prescription || "")
-
-      if (data.audio) {
-        const next: Record<number, string> = {}
-        await Promise.all(
-          data.audio.map(async (a, idx) => {
-            const candidate = a.download_url || a.storage_uri || a.storage_path
-            const url = await resolveStorageUrl(candidate)
-            if (url) next[idx] = url
-          })
-        )
-        setResolvedAudio(next)
-      }
-
-      const reportCandidate = data.lab_results?.report_uri || data.lab_results?.report_path
-      setResolvedReport(await resolveStorageUrl(reportCandidate))
-
-      if (data.doctor_files) {
-        const next: Record<number, string> = {}
-        await Promise.all(
-          data.doctor_files.map(async (f, idx) => {
-            const url = await resolveStorageUrl(f.url || f.storage_path)
-            if (url) next[idx] = url
-          })
-        )
-        setResolvedDoctorFiles(next)
-      }
+  const loadPatient = useCallback(async () => {
+    const id = params.id
+    const snap = await getDoc(doc(db, "patients", id))
+    if (!snap.exists()) {
+      router.replace("/doctor")
+      return
     }
-    load()
-  }, [params, router])
+    const data = snap.data() as PatientRecord
+    setPatient({ id, ...data })
+    setNote(data.doctor_notes || "")
+    setInstruction(data.doctor_instructions || "")
+    setPrescription(data.prescription || "")
+
+    const audioUrls: Record<number, string> = {}
+    if (data.audio) {
+      await Promise.all(
+        data.audio.map(async (a, idx) => {
+          const candidate = a.download_url || a.storage_uri || a.storage_path
+          const url = await resolveStorageUrl(candidate)
+          if (url) audioUrls[idx] = url
+        })
+      )
+    }
+    setResolvedAudio(audioUrls)
+
+    const reportCandidate = data.lab_results?.report_uri || data.lab_results?.report_path
+    setResolvedReport(await resolveStorageUrl(reportCandidate))
+
+    const doctorFileUrls: Record<number, string> = {}
+    if (data.doctor_files) {
+      await Promise.all(
+        data.doctor_files.map(async (f, idx) => {
+          const url = await resolveStorageUrl(f.url || f.storage_path)
+          if (url) doctorFileUrls[idx] = url
+        })
+      )
+    }
+    setResolvedDoctorFiles(doctorFileUrls)
+  }, [params.id, router])
+
+  useEffect(() => {
+    loadPatient()
+  }, [loadPatient])
 
   const updateStatus = async (status: string) => {
     if (!patient) return
-    const previous = patient.status?.triage_status || AWAITING_DOCTOR
+    const previous = normalizeStatusCode(patient.status?.triage_status)
     setSavingStatus(true)
     setPatient((prev) => (prev ? { ...prev, status: { triage_status: status } } : prev))
     try {
@@ -123,43 +133,36 @@ export default function DoctorPatientPage() {
 
   const uploadFile = async (file: File) => {
     if (!patient) return
-    if (!navigator.onLine) {
+    setUploading(true)
+    try {
       await addUpload({
         id: `${Date.now()}-${file.name}`,
         patientId: patient.id,
         role: "DOCTOR",
         kind: "report",
         fileName: file.name,
-        mimeType: file.type || "application/pdf",
+        mimeType: file.type || "application/octet-stream",
         blob: file,
         createdAt: new Date().toISOString(),
       })
-      alert("Saved for sync when online.")
-      return
-    }
-    setUploading(true)
-    try {
-      const safeName = `${Date.now()}-${file.name}`.replace(/\s+/g, "_")
-      const path = `doctor_uploads/${patient.id}/${safeName}`
-      const fileRef = ref(storage, path)
-      await auth.currentUser?.getIdToken(true)
-      await uploadBytes(fileRef, file)
-      const url = await resolveStorageUrl(path)
 
-      const existing = patient.doctor_files || []
-      const entry: { name: string; storage_path: string; uploaded_at: string; url?: string } = {
-        name: file.name,
-        storage_path: path,
-        uploaded_at: new Date().toISOString(),
+      if (!navigator.onLine) {
+        alert("Saved for sync when online.")
+        return
       }
-      if (url) entry.url = url
-      const next = [...existing, entry]
 
-      await updateDoc(doc(db, "patients", patient.id), {
-        doctor_files: next,
-      })
-
-      setPatient((prev) => (prev ? { ...prev, doctor_files: next } : prev))
+      const userId = auth.currentUser?.uid
+      if (!userId) {
+        alert("User session not ready. Please retry.")
+        return
+      }
+      const result = await syncUploads(userId)
+      await loadPatient()
+      if (result.failed > 0) {
+        alert("Upload queued, but one or more files failed to sync. Please retry.")
+      } else {
+        alert("Upload completed.")
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Upload failed. Check storage rules and role mapping for this user."
@@ -171,7 +174,7 @@ export default function DoctorPatientPage() {
 
   if (!patient) return <div className="p-6">Loading...</div>
 
-  const currentStatus = patient.status?.triage_status || AWAITING_DOCTOR
+  const currentStatus = normalizeStatusCode(patient.status?.triage_status)
   const statusLabelMap: Record<string, string> = {
     [AWAITING_DOCTOR]: "Awaiting Doctor Review",
     [ASSIGNED_TO_LAB]: "Assigned To Lab",

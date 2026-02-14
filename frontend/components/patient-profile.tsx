@@ -191,6 +191,9 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
             <p className="text-sm text-muted-foreground">
               {patient.age} {language === "en" ? "years" : "वर्ष"} | {patient.pincode}
             </p>
+            <p className="text-sm font-medium text-foreground">
+              Sample ID: {patient.sampleId || "-"}
+            </p>
             <p className="text-xs text-muted-foreground line-clamp-1">
               {language === "en" ? patient.address : patient.addressHi}
             </p>

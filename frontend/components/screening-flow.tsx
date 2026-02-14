@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useLanguage } from "@/lib/language-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Slider } from "@/components/ui/slider"
 import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Activity, ArrowLeft, ArrowRight, Check, AlertTriangle } from "lucide-react"
+import { Activity, ArrowLeft, ArrowRight, Check, AlertTriangle, Mic, Square } from "lucide-react"
 import { LanguageSwitcher } from "./language-switcher"
 import { submitScreening, calculateRiskScore, type ScreeningData } from "@/lib/api"
 import { addUpload, assignPendingUploadsToPatient } from "@/lib/db"
@@ -87,11 +87,18 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
   const { t, language } = useLanguage()
   const [step, setStep] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [formError, setFormError] = useState("")
   const [showSampleId, setShowSampleId] = useState(false)
   const [generatedSampleId, setGeneratedSampleId] = useState<string | null>(null)
   const [pendingPatient, setPendingPatient] = useState<Patient | null>(null)
   const [uploadedAudioName, setUploadedAudioName] = useState<string>("")
   const [uploadedAudioPreview, setUploadedAudioPreview] = useState<string>("")
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
+  const [recordingError, setRecordingError] = useState("")
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const recordedChunksRef = useRef<BlobPart[]>([])
   const totalSteps = 4
   
   const [formData, setFormData] = useState<FormData>({
@@ -117,13 +124,56 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     },
   })
 
+  const validateStep = (stepNumber: number): string | null => {
+    const phoneDigits = formData.phone.replace(/\D/g, "")
+    if (stepNumber === 1) {
+      if (formData.name.trim().length < 2) {
+        return language === "en" ? "Please enter patient name." : "कृपया मरीज का नाम दर्ज करें।"
+      }
+      const age = Number(formData.age)
+      if (!Number.isFinite(age) || age < 1 || age > 120) {
+        return language === "en" ? "Please enter a valid age." : "कृपया सही उम्र दर्ज करें।"
+      }
+      if (phoneDigits.length !== 10) {
+        return language === "en" ? "Please enter a valid 10-digit phone number." : "कृपया सही 10 अंकों का फोन नंबर दर्ज करें।"
+      }
+      if (formData.address.trim().length < 5) {
+        return language === "en" ? "Please enter full address." : "कृपया पूरा पता दर्ज करें।"
+      }
+      if (!/^\d{6}$/.test(formData.pincode.trim())) {
+        return language === "en" ? "Please enter a valid 6-digit pincode." : "कृपया सही 6 अंकों का पिनकोड दर्ज करें।"
+      }
+    }
+    if (stepNumber === 2) {
+      const weight = Number(formData.weight)
+      const height = Number(formData.height)
+      if (!Number.isFinite(weight) || weight <= 0) {
+        return language === "en" ? "Please enter valid weight." : "कृपया सही वजन दर्ज करें।"
+      }
+      if (!Number.isFinite(height) || height <= 0) {
+        return language === "en" ? "Please enter valid height." : "कृपया सही ऊंचाई दर्ज करें।"
+      }
+    }
+    if (stepNumber === 4 && !uploadedAudioName) {
+      return language === "en" ? "Please upload one cough audio file before submit." : "सबमिट से पहले एक खांसी ऑडियो फ़ाइल अपलोड करें।"
+    }
+    return null
+  }
+
   const handleNext = () => {
+    const error = validateStep(step)
+    if (error) {
+      setFormError(error)
+      return
+    }
+    setFormError("")
     if (step < totalSteps) {
       setStep(step + 1)
     }
   }
 
   const handlePrevious = () => {
+    setFormError("")
     if (step > 1) {
       setStep(step - 1)
     }
@@ -141,9 +191,13 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       createdAt: new Date().toISOString(),
     }
     await addUpload(upload)
+    if (uploadedAudioPreview) {
+      URL.revokeObjectURL(uploadedAudioPreview)
+    }
     const preview = URL.createObjectURL(file)
     setUploadedAudioName(file.name)
     setUploadedAudioPreview(preview)
+    setFormError("")
     setFormData((prev) => ({
       ...prev,
       audioRecordings: { ...prev.audioRecordings, slot1: "good", slot2: "idle", slot3: "idle" },
@@ -151,13 +205,100 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     alert(language === "en" ? "Audio saved for sync." : "ऑडियो सिंक के लिए सहेजा गया।")
   }
 
+  const stopMediaTracks = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+      mediaStreamRef.current = null
+    }
+  }
+
+  const startRecording = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setRecordingError(
+        language === "en"
+          ? "Microphone recording is not supported on this device/browser."
+          : "इस डिवाइस/ब्राउज़र में माइक्रोफोन रिकॉर्डिंग सपोर्ट नहीं है।"
+      )
+      return
+    }
+    try {
+      setRecordingError("")
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaStreamRef.current = stream
+      recordedChunksRef.current = []
+
+      const preferredMime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm"
+      const recorder = new MediaRecorder(stream, { mimeType: preferredMime })
+      mediaRecorderRef.current = recorder
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordedChunksRef.current.push(event.data)
+      }
+      recorder.onstop = async () => {
+        const blob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || "audio/webm" })
+        if (blob.size === 0) {
+          setRecordingError(language === "en" ? "Recording failed. Please retry." : "रिकॉर्डिंग विफल हुई। फिर प्रयास करें।")
+          stopMediaTracks()
+          return
+        }
+        const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm"
+        const file = new File([blob], `cough-${Date.now()}.${ext}`, { type: blob.type })
+        await handleAudioUpload(file)
+        stopMediaTracks()
+      }
+
+      recorder.start(250)
+      setRecordingSeconds(0)
+      setIsRecording(true)
+    } catch (error) {
+      setRecordingError(
+        language === "en"
+          ? "Microphone permission denied or unavailable."
+          : "माइक्रोफोन अनुमति नहीं मिली या उपलब्ध नहीं है।"
+      )
+      stopMediaTracks()
+    }
+  }
+
+  const stopRecording = () => {
+    const recorder = mediaRecorderRef.current
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop()
+    }
+    setIsRecording(false)
+  }
+
   useEffect(() => {
     return () => {
       if (uploadedAudioPreview) URL.revokeObjectURL(uploadedAudioPreview)
+      const recorder = mediaRecorderRef.current
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop()
+      }
+      stopMediaTracks()
     }
   }, [uploadedAudioPreview])
 
+  useEffect(() => {
+    if (!isRecording) return
+    const timer = window.setInterval(() => {
+      setRecordingSeconds((prev) => prev + 1)
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [isRecording])
+
   const handleSubmit = async () => {
+    for (const s of [1, 2, 3, 4]) {
+      const error = validateStep(s)
+      if (error) {
+        setFormError(error)
+        setStep(s)
+        return
+      }
+    }
+    setFormError("")
     setIsSubmitting(true)
 
     // Convert risk factors to array of positive responses
@@ -218,7 +359,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       riskLevel,
       status: "awaitingDoctor",
       distanceToPHC: Math.round(Math.random() * 20 + 2),
-      needsSync: !isOnline,
+      needsSync: true,
       testScheduled: false,
       weight: parseFloat(formData.weight) || undefined,
       height: parseFloat(formData.height) || undefined,
@@ -341,6 +482,11 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
 
       {/* Main Content */}
       <main className="flex-1 p-4 pb-24">
+        {formError && (
+          <div className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {formError}
+          </div>
+        )}
         {/* Step 1: Identity */}
         {step === 1 && (
           <Card>
@@ -687,21 +833,36 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
             <CardContent className="space-y-4">
               <div className="rounded-lg border p-4">
                 <p className="text-sm font-medium mb-2">
-                  {language === "en" ? "Upload Cough Audio (one file)" : "खांसी का ऑडियो अपलोड करें (एक फ़ाइल)"}
+                  {language === "en" ? "Record Cough Audio" : "खांसी का ऑडियो रिकॉर्ड करें"}
                 </p>
                 <p className="mb-3 text-xs text-muted-foreground">
                   {language === "en"
-                    ? "Use a short, clear recording in WAV/MP3/M4A format."
-                    : "WAV/MP3/M4A में छोटी और साफ रिकॉर्डिंग अपलोड करें।"}
+                    ? "Use microphone to record one clear cough sample (3-10 seconds)."
+                    : "माइक्रोफोन से 3-10 सेकंड का एक साफ खांसी सैंपल रिकॉर्ड करें।"}
                 </p>
-                <Input
-                  type="file"
-                  accept="audio/*"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) handleAudioUpload(file)
-                  }}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  {!isRecording ? (
+                    <Button type="button" onClick={startRecording}>
+                      <Mic className="mr-2 h-4 w-4" />
+                      {language === "en" ? "Start Recording" : "रिकॉर्डिंग शुरू करें"}
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="destructive" onClick={stopRecording}>
+                      <Square className="mr-2 h-4 w-4" />
+                      {language === "en" ? "Stop Recording" : "रिकॉर्डिंग रोकें"}
+                    </Button>
+                  )}
+                  {isRecording && (
+                    <span className="text-sm text-red-600">
+                      {language === "en" ? "Recording" : "रिकॉर्डिंग"}: {recordingSeconds}s
+                    </span>
+                  )}
+                </div>
+                {recordingError && (
+                  <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {recordingError}
+                  </div>
+                )}
                 {uploadedAudioName && (
                   <div className="mt-3 rounded-md bg-muted p-3">
                     <div className="text-xs text-muted-foreground">

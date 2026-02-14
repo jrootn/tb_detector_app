@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from firebase_admin import auth, credentials, firestore, initialize_app
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def _utc_now() -> str:
@@ -100,9 +100,13 @@ class Status(BaseModel):
 
 
 class Patient(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     patient_local_id: str
     device_id: str
     asha_worker_id: str
+    asha_id: Optional[str] = None
+    sample_id: Optional[str] = None
     created_at_offline: str
     synced_at: Optional[str] = None
 
@@ -247,6 +251,8 @@ async def sync_patients(request: Request, _: Dict[str, Any] = Depends(verify_fir
         )
 
         record.synced_at = _utc_now()
+        if not record.asha_id:
+            record.asha_id = record.asha_worker_id
         record.ai = ai_result
 
         doc_ref.set(record.model_dump(), merge=True)
