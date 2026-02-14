@@ -5,6 +5,7 @@ export interface PatientRecord extends Patient {}
 
 export interface UploadRecord {
   id: string
+  ownerUid?: string
   patientId: string
   role: "ASHA" | "DOCTOR" | "LAB_TECH"
   kind: "audio" | "image" | "report"
@@ -58,23 +59,27 @@ export async function addUpload(upload: UploadRecord) {
   await db.uploads.put(upload)
 }
 
-export async function assignPendingUploadsToPatient(patientId: string) {
+export async function assignPendingUploadsToPatient(patientId: string, ownerUid?: string) {
   const pending = await db.uploads.where("patientId").equals("pending").toArray()
+  const scoped = ownerUid ? pending.filter((upload) => upload.ownerUid === ownerUid) : pending
   await Promise.all(
-    pending.map((upload) => db.uploads.put({ ...upload, patientId }))
+    scoped.map((upload) => db.uploads.put({ ...upload, patientId }))
   )
 }
 
-export async function getPendingUploads() {
-  return db.uploads.toArray()
+export async function getPendingUploads(ownerUid?: string) {
+  const all = await db.uploads.toArray()
+  if (!ownerUid) return all
+  return all.filter((upload) => upload.ownerUid === ownerUid)
 }
 
 export async function removeUpload(id: string) {
   await db.uploads.delete(id)
 }
 
-export async function getPendingUploadCount() {
-  return db.uploads.count()
+export async function getPendingUploadCount(ownerUid?: string) {
+  const uploads = await getPendingUploads(ownerUid)
+  return uploads.length
 }
 
 export { db }

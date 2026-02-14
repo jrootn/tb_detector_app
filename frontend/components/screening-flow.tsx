@@ -11,6 +11,7 @@ import { Slider } from "@/components/ui/slider"
 import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Activity, ArrowLeft, ArrowRight, Check, AlertTriangle, Mic, Square } from "lucide-react"
+import { toast } from "sonner"
 import { LanguageSwitcher } from "./language-switcher"
 import { submitScreening, calculateRiskScore, type ScreeningData } from "@/lib/api"
 import { addUpload, assignPendingUploadsToPatient } from "@/lib/db"
@@ -182,6 +183,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
   const handleAudioUpload = async (file: File) => {
     const upload = {
       id: `${Date.now()}-${file.name}`,
+      ownerUid: ashaId,
       patientId: "pending",
       role: "ASHA" as const,
       kind: "audio" as const,
@@ -202,7 +204,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       ...prev,
       audioRecordings: { ...prev.audioRecordings, slot1: "good", slot2: "idle", slot3: "idle" },
     }))
-    alert(language === "en" ? "Audio saved for sync." : "ऑडियो सिंक के लिए सहेजा गया।")
+    toast.success(language === "en" ? "Audio saved for sync." : "ऑडियो सिंक के लिए सहेजा गया।")
   }
 
   const stopMediaTracks = () => {
@@ -378,7 +380,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       sampleId,
     }
 
-    await assignPendingUploadsToPatient(newPatient.id)
+    await assignPendingUploadsToPatient(newPatient.id, ashaId)
 
     setGeneratedSampleId(sampleId)
     setPendingPatient(newPatient)
@@ -431,9 +433,9 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
             className="w-full"
             onClick={() => {
               if (!isOnline) {
-                alert(t.savedToLocal)
+                toast.success(t.savedToLocal)
               } else {
-                alert(t.screeningSubmitted)
+                toast.success(t.screeningSubmitted)
               }
               setShowSampleId(false)
               onComplete(pendingPatient)
@@ -540,9 +542,15 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                   id="phone"
                   type="tel"
                   value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      phone: e.target.value.replace(/\D/g, "").slice(0, 10),
+                    })
+                  }
                   className="h-11"
-                  placeholder="+91 98765 43210"
+                  placeholder="9876543210"
+                  maxLength={10}
                 />
               </div>
 

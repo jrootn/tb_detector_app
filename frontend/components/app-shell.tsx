@@ -113,7 +113,7 @@ export function AppShell({
         if (isMounted && stored.length > 0) {
           setPatients(stored)
         }
-        const pendingCount = await getPendingUploadCount()
+        const pendingCount = await getPendingUploadCount(initialAshaId || undefined)
         const needsSyncCount = stored.filter((p) => p.needsSync).length
         if (isMounted) setPendingUploads(pendingCount + needsSyncCount)
       } catch (error) {
@@ -134,7 +134,7 @@ export function AppShell({
     const handler = async () => {
       const stored = await getAllPatients()
       setPatients(stored)
-      const pendingCount = await getPendingUploadCount()
+      const pendingCount = await getPendingUploadCount(ashaId || undefined)
       const needsSyncCount = stored.filter((p) => p.needsSync).length
       setPendingUploads(pendingCount + needsSyncCount)
     }
@@ -149,7 +149,7 @@ export function AppShell({
   useEffect(() => {
     if (!dbReady || !isOnline) return
     getAllPatients().then(setPatients).catch(() => undefined)
-    Promise.all([getAllPatients(), getPendingUploadCount()])
+    Promise.all([getAllPatients(), getPendingUploadCount(ashaId || undefined)])
       .then(([stored, pendingCount]) => {
         const needsSyncCount = stored.filter((p) => p.needsSync).length
         setPendingUploads(pendingCount + needsSyncCount)

@@ -5,12 +5,15 @@ import { collection, onSnapshot, query } from "firebase/firestore"
 import { db, auth } from "@/lib/firebase"
 import { addUpload } from "@/lib/db"
 import { syncUploads } from "@/lib/sync"
+import { resolveStorageUrl } from "@/lib/storage-utils"
+import { toast } from "sonner"
 
 interface PatientRecord {
   id: string
   demographics?: { name?: string }
   ai?: { risk_score?: number }
   status?: { triage_status?: string }
+  lab_results?: { report_path?: string; report_uri?: string; files?: { report_path?: string; report_uri?: string }[] }
   created_at_offline?: string
   doctor_priority?: boolean
   doctor_rank?: number
@@ -29,6 +32,7 @@ function normalizeStatusCode(status?: string): string {
 
 export function LabQueue() {
   const [patients, setPatients] = useState<PatientRecord[]>([])
+  const [reportUrls, setReportUrls] = useState<Record<string, string>>({})
   const [uploadingId, setUploadingId] = useState<string | null>(null)
   const [filter, setFilter] = useState<"queue" | "done" | "all">("queue")
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "30days" | "date">("all")
@@ -47,6 +51,31 @@ export function LabQueue() {
     )
     return () => unsub()
   }, [])
+
+  useEffect(() => {
+    let alive = true
+    const resolveUrls = async () => {
+      const next: Record<string, string> = {}
+      await Promise.all(
+        patients.map(async (p) => {
+          const lastFile = p.lab_results?.files?.[p.lab_results.files.length - 1]
+          const candidate =
+            p.lab_results?.report_uri ||
+            p.lab_results?.report_path ||
+            lastFile?.report_uri ||
+            lastFile?.report_path
+          if (!candidate) return
+          const url = await resolveStorageUrl(candidate)
+          if (url) next[p.id] = url
+        })
+      )
+      if (alive) setReportUrls(next)
+    }
+    resolveUrls().catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [patients])
 
   const ordered = useMemo(() => {
     return [...patients].sort((a, b) => {
@@ -70,8 +99,14 @@ export function LabQueue() {
 
       const status = p.status?.triage_status
       const statusCode = normalizeStatusCode(status)
-      if (filter === "queue" && statusCode === "LAB_DONE") return false
-      if (filter === "done" && statusCode !== "LAB_DONE") return false
+      const hasLabResult = Boolean(
+        p.lab_results?.report_path ||
+          p.lab_results?.report_uri ||
+          (p.lab_results?.files && p.lab_results.files.length > 0)
+      )
+      const isDone = statusCode === "LAB_DONE" || hasLabResult
+      if (filter === "queue" && isDone) return false
+      if (filter === "done" && !isDone) return false
 
       if (!p.created_at_offline) return true
       const created = new Date(p.created_at_offline)
@@ -157,6 +192,7 @@ export function LabQueue() {
               <th className="text-left p-3">AI Risk</th>
               <th className="text-left p-3">Status</th>
               <th className="text-left p-3">ASHA Phone</th>
+              <th className="text-left p-3">Report</th>
               <th className="text-left p-3">Upload Report</th>
             </tr>
           </thead>
@@ -168,49 +204,81 @@ export function LabQueue() {
                 <td className={`p-3 ${p.ai?.risk_score && p.ai.risk_score >= 8 ? "text-red-600" : "text-emerald-600"}`}>
                   {p.ai?.risk_score ?? 0}
                 </td>
-                <td className="p-3">{normalizeStatusCode(p.status?.triage_status)}</td>
+                <td className="p-3">
+                  {Boolean(
+                    p.lab_results?.report_path ||
+                      p.lab_results?.report_uri ||
+                      (p.lab_results?.files && p.lab_results.files.length > 0)
+                  )
+                    ? "LAB_DONE"
+                    : normalizeStatusCode(p.status?.triage_status)}
+                </td>
                 <td className="p-3">{p.asha_phone_number || "-"}</td>
+                <td className="p-3">
+                  {reportUrls[p.id] ? (
+                    <a
+                      href={reportUrls[p.id]}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-blue-600 underline"
+                    >
+                      Preview
+                    </a>
+                  ) : (
+                    "-"
+                  )}
+                </td>
                 <td className="p-3">
                   <input
                     type="file"
+                    multiple
                     accept="application/pdf,image/*"
                     disabled={uploadingId === p.id}
                     onChange={async (e) => {
-                      const file = e.target.files?.[0]
-                      if (!file) return
+                      const inputEl = e.currentTarget
+                      const files = Array.from(e.target.files || [])
+                      if (files.length === 0) return
 
                       try {
                         setUploadingId(p.id)
-                        await addUpload({
-                          id: `${Date.now()}-${file.name}`,
-                          patientId: p.id,
-                          role: "LAB_TECH",
-                          kind: "report",
-                          fileName: file.name,
-                          mimeType: file.type || "application/octet-stream",
-                          blob: file,
-                          createdAt: new Date().toISOString(),
-                        })
+                        const queuedIds: string[] = []
+                        for (const file of files) {
+                          const uploadId = `${Date.now()}-${Math.random().toString(16).slice(2)}-${file.name}`
+                          queuedIds.push(uploadId)
+                          await addUpload({
+                            id: uploadId,
+                            ownerUid: auth.currentUser?.uid,
+                            patientId: p.id,
+                            role: "LAB_TECH",
+                            kind: "report",
+                            fileName: file.name,
+                            mimeType: file.type || "application/octet-stream",
+                            blob: file,
+                            createdAt: new Date().toISOString(),
+                          })
+                        }
                         if (!navigator.onLine) {
-                          alert("Saved for sync when online.")
+                          toast.info(`${files.length} file(s) saved for sync when online.`)
                           return
                         }
                         const userId = auth.currentUser?.uid
                         if (!userId) {
-                          alert("User session not ready. Please retry.")
+                          toast.error("User session not ready. Please retry.")
                           return
                         }
-                        const result = await syncUploads(userId)
+                        const result = await syncUploads(userId, { role: "LAB_TECH", onlyIds: queuedIds })
                         if (result.failed > 0) {
-                          alert("Report queued, but sync failed for one or more files. Please retry.")
+                          const detail = result.errors[0]?.message
+                          toast.error(detail ? `Upload failed: ${detail}` : "One or more files failed to sync. Please retry.")
                         } else {
-                          alert("Report uploaded.")
+                          toast.success(`${files.length} file(s) uploaded.`)
                         }
                       } catch (error) {
                         const message = error instanceof Error ? error.message : "Upload failed"
-                        alert(message)
+                        toast.error(message)
                       } finally {
                         setUploadingId(null)
+                        inputEl.value = ""
                       }
                     }}
                   />
@@ -219,7 +287,7 @@ export function LabQueue() {
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td className="p-6 text-center text-muted-foreground" colSpan={6}>
+                <td className="p-6 text-center text-muted-foreground" colSpan={7}>
                   No patients in queue
                 </td>
               </tr>

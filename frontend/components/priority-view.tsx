@@ -18,6 +18,7 @@ import {
 import { LanguageSwitcher } from "./language-switcher"
 import { notifyPatient } from "@/lib/api"
 import type { Patient, RiskLevel } from "@/lib/mockData"
+import { toast } from "sonner"
 
 interface PriorityViewProps {
   patients: Patient[]
@@ -68,7 +69,7 @@ export function PriorityView({ patients, onBack, onViewPatient }: PriorityViewPr
     e.stopPropagation()
     setNotifyingId(patient.id)
     await notifyPatient(patient)
-    alert(t.notificationSent)
+    toast.success(t.notificationSent)
     setNotifyingId(null)
   }
 

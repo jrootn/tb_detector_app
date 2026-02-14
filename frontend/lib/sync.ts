@@ -5,6 +5,25 @@ import { doc, updateDoc, arrayUnion, setDoc } from "firebase/firestore"
 import { ref, uploadBytes } from "firebase/storage"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
+type AppRole = "ASHA" | "DOCTOR" | "LAB_TECH"
+interface UploadSyncOptions {
+  role?: AppRole
+  onlyIds?: string[]
+}
+
+interface UploadSyncResult {
+  uploaded: number
+  failed: number
+  errors: Array<{ id: string; message: string }>
+}
+
+function getErrorCode(error: unknown): string | undefined {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { code?: unknown }).code
+    if (typeof code === "string") return code
+  }
+  return undefined
+}
 
 function mapStatusToApi(status?: Patient["status"]): string {
   switch (status) {
@@ -19,6 +38,30 @@ function mapStatusToApi(status?: Patient["status"]): string {
     default:
       return "AWAITING_DOCTOR"
   }
+}
+
+function inferMimeType(fileName: string, kind: "audio" | "image" | "report", fallback?: string): string {
+  if (fallback && fallback !== "application/octet-stream") return fallback
+  const lower = fileName.toLowerCase()
+  if (kind === "audio") {
+    if (lower.endsWith(".wav")) return "audio/wav"
+    if (lower.endsWith(".mp3")) return "audio/mpeg"
+    if (lower.endsWith(".ogg")) return "audio/ogg"
+    if (lower.endsWith(".m4a")) return "audio/mp4"
+    return "audio/webm"
+  }
+  if (kind === "report") {
+    if (lower.endsWith(".pdf")) return "application/pdf"
+    if (lower.endsWith(".png")) return "image/png"
+    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
+    if (lower.endsWith(".webp")) return "image/webp"
+  }
+  if (kind === "image") {
+    if (lower.endsWith(".png")) return "image/png"
+    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
+    if (lower.endsWith(".webp")) return "image/webp"
+  }
+  return fallback || "application/octet-stream"
 }
 
 function mapCoughNatureToApi(value?: Patient["coughNature"]): string | null {
@@ -225,50 +268,77 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
   }
 }
 
-export async function syncUploads(userId: string): Promise<{ uploaded: number; failed: number }> {
-  if (!navigator.onLine) return { uploaded: 0, failed: 0 }
-
-  const uploads = await getPendingUploads()
-  if (uploads.length === 0) return { uploaded: 0, failed: 0 }
+export async function syncUploads(userId: string, options: UploadSyncOptions = {}): Promise<UploadSyncResult> {
+  if (!navigator.onLine) return { uploaded: 0, failed: 0, errors: [] }
+  const currentRole = (typeof window !== "undefined" ? localStorage.getItem("user_role") : null) as AppRole | null
+  const uploads = (await getPendingUploads(userId)).filter((upload) => {
+    if (upload.patientId === "pending") return false
+    if (options.role && upload.role !== options.role) return false
+    if (!options.role && currentRole && upload.role !== currentRole) return false
+    if (options.onlyIds && !options.onlyIds.includes(upload.id)) return false
+    return true
+  })
+  if (uploads.length === 0) return { uploaded: 0, failed: 0, errors: [] }
   let uploaded = 0
   let failed = 0
+  const errors: Array<{ id: string; message: string }> = []
 
   for (const upload of uploads) {
     try {
       const safeName = `${Date.now()}-${upload.fileName}`.replace(/\s+/g, "_")
       let path = ""
+      let doctorFallbackPath: string | null = null
       if (upload.role === "ASHA") {
         path = `asha_uploads/${userId}/${upload.patientId}/${safeName}`
       } else if (upload.role === "LAB_TECH") {
         path = `lab_results/${userId}/${upload.patientId}/${safeName}`
       } else {
-        path = `doctor_uploads/${upload.patientId}/${safeName}`
+        // Prefer UID-scoped path for stricter rule sets; fallback to legacy path if needed.
+        path = `doctor_uploads/${userId}/${upload.patientId}/${safeName}`
+        doctorFallbackPath = `doctor_uploads/${upload.patientId}/${safeName}`
       }
 
-      const fileRef = ref(storage, path)
-      const contentType =
-        upload.mimeType ||
-        (upload.kind === "audio" ? "audio/webm" : upload.kind === "report" ? "application/pdf" : "application/octet-stream")
+      const contentType = inferMimeType(upload.fileName, upload.kind, upload.mimeType)
       await auth.currentUser?.getIdToken(true)
-      await uploadBytes(fileRef, upload.blob, { contentType })
+      try {
+        const fileRef = ref(storage, path)
+        await uploadBytes(fileRef, upload.blob, { contentType })
+      } catch (initialError) {
+        if (
+          upload.role === "DOCTOR" &&
+          doctorFallbackPath &&
+          getErrorCode(initialError) === "storage/unauthorized"
+        ) {
+          const fallbackRef = ref(storage, doctorFallbackPath)
+          await uploadBytes(fallbackRef, upload.blob, { contentType })
+          path = doctorFallbackPath
+        } else {
+          throw initialError
+        }
+      }
 
       const patientRef = doc(db, "patients", upload.patientId)
       const uploadedAt = new Date().toISOString()
 
       if (upload.role === "LAB_TECH" && upload.kind === "report") {
-        const labResults: Record<string, unknown> = {
+        const reportEntry: Record<string, unknown> = {
+          name: upload.fileName,
           report_path: path,
+          mime_type: contentType,
           uploaded_at: uploadedAt,
           uploaded_by: userId,
         }
         await updateDoc(patientRef, {
-          lab_results: labResults,
-          "status.triage_status": "LAB_DONE",
+          "lab_results.report_path": path,
+          "lab_results.uploaded_at": uploadedAt,
+          "lab_results.uploaded_by": userId,
+          "lab_results.files": arrayUnion(reportEntry),
         })
       } else if (upload.role === "DOCTOR" && upload.kind === "report") {
         const fileEntry: Record<string, unknown> = {
           name: upload.fileName,
           storage_path: path,
+          mime_type: contentType,
           uploaded_at: uploadedAt,
         }
         await updateDoc(patientRef, {
@@ -290,8 +360,10 @@ export async function syncUploads(userId: string): Promise<{ uploaded: number; f
       uploaded += 1
     } catch (error) {
       failed += 1
+      const message = error instanceof Error ? error.message : "Upload failed"
+      errors.push({ id: upload.id, message })
       console.warn("Upload sync failed for", upload.id, error)
     }
   }
-  return { uploaded, failed }
+  return { uploaded, failed, errors }
 }

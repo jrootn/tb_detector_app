@@ -7,6 +7,7 @@ import { auth, db } from "@/lib/firebase"
 import { addUpload } from "@/lib/db"
 import { resolveStorageUrl } from "@/lib/storage-utils"
 import { syncUploads } from "@/lib/sync"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -30,8 +31,13 @@ interface PatientRecord {
   doctor_instructions?: string
   prescription?: string
   sample_id?: string
-  doctor_files?: { name: string; url?: string; storage_path?: string; uploaded_at: string }[]
-  lab_results?: { report_uri?: string; report_path?: string; uploaded_at?: string }
+  doctor_files?: { name: string; url?: string; storage_path?: string; mime_type?: string; uploaded_at: string }[]
+  lab_results?: {
+    report_uri?: string
+    report_path?: string
+    uploaded_at?: string
+    files?: { name?: string; report_path?: string; report_uri?: string; mime_type?: string; uploaded_at?: string }[]
+  }
 }
 
 function normalizeName(name?: string) {
@@ -48,6 +54,14 @@ function normalizeStatusCode(status?: string): string {
   return normalized
 }
 
+function fileKind(name?: string): "image" | "audio" | "pdf" | "other" {
+  const lower = (name || "").toLowerCase()
+  if (/\.(png|jpg|jpeg|webp|gif)$/.test(lower)) return "image"
+  if (/\.(mp3|wav|ogg|webm|m4a)$/.test(lower)) return "audio"
+  if (/\.pdf$/.test(lower)) return "pdf"
+  return "other"
+}
+
 export default function DoctorPatientPage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
@@ -59,6 +73,7 @@ export default function DoctorPatientPage() {
   const [savingStatus, setSavingStatus] = useState(false)
   const [resolvedAudio, setResolvedAudio] = useState<Record<number, string>>({})
   const [resolvedReport, setResolvedReport] = useState<string | null>(null)
+  const [resolvedLabFiles, setResolvedLabFiles] = useState<Record<number, string>>({})
   const [resolvedDoctorFiles, setResolvedDoctorFiles] = useState<Record<number, string>>({})
 
   const loadPatient = useCallback(async () => {
@@ -88,6 +103,16 @@ export default function DoctorPatientPage() {
 
     const reportCandidate = data.lab_results?.report_uri || data.lab_results?.report_path
     setResolvedReport(await resolveStorageUrl(reportCandidate))
+    const labFileUrls: Record<number, string> = {}
+    if (data.lab_results?.files) {
+      await Promise.all(
+        data.lab_results.files.map(async (f, idx) => {
+          const url = await resolveStorageUrl(f.report_uri || f.report_path)
+          if (url) labFileUrls[idx] = url
+        })
+      )
+    }
+    setResolvedLabFiles(labFileUrls)
 
     const doctorFileUrls: Record<number, string> = {}
     if (data.doctor_files) {
@@ -116,7 +141,7 @@ export default function DoctorPatientPage() {
       })
     } catch (error) {
       setPatient((prev) => (prev ? { ...prev, status: { triage_status: previous } } : prev))
-      alert("Could not update status. Please retry.")
+      toast.error("Could not update status. Please retry.")
     } finally {
       setSavingStatus(false)
     }
@@ -124,49 +149,63 @@ export default function DoctorPatientPage() {
 
   const saveNotes = async () => {
     if (!patient) return
-    await updateDoc(doc(db, "patients", patient.id), {
-      doctor_notes: note,
-      doctor_instructions: instruction,
-      prescription: prescription,
-    })
+    try {
+      await updateDoc(doc(db, "patients", patient.id), {
+        doctor_notes: note,
+        doctor_instructions: instruction,
+        prescription: prescription,
+      })
+      toast.success("Notes saved.")
+    } catch {
+      toast.error("Could not save notes. Please retry.")
+    }
   }
 
-  const uploadFile = async (file: File) => {
+  const uploadFiles = async (filesInput: FileList | File[]) => {
     if (!patient) return
+    const files = Array.from(filesInput)
+    if (files.length === 0) return
     setUploading(true)
     try {
-      await addUpload({
-        id: `${Date.now()}-${file.name}`,
-        patientId: patient.id,
-        role: "DOCTOR",
-        kind: "report",
-        fileName: file.name,
-        mimeType: file.type || "application/octet-stream",
-        blob: file,
-        createdAt: new Date().toISOString(),
-      })
+      const queuedIds: string[] = []
+      for (const file of files) {
+        const uploadId = `${Date.now()}-${Math.random().toString(16).slice(2)}-${file.name}`
+        queuedIds.push(uploadId)
+        await addUpload({
+          id: uploadId,
+          ownerUid: auth.currentUser?.uid,
+          patientId: patient.id,
+          role: "DOCTOR",
+          kind: "report",
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          blob: file,
+          createdAt: new Date().toISOString(),
+        })
+      }
 
       if (!navigator.onLine) {
-        alert("Saved for sync when online.")
+        toast.info(`${files.length} file(s) saved for sync when online.`)
         return
       }
 
       const userId = auth.currentUser?.uid
       if (!userId) {
-        alert("User session not ready. Please retry.")
+        toast.error("User session not ready. Please retry.")
         return
       }
-      const result = await syncUploads(userId)
+      const result = await syncUploads(userId, { role: "DOCTOR", onlyIds: queuedIds })
       await loadPatient()
       if (result.failed > 0) {
-        alert("Upload queued, but one or more files failed to sync. Please retry.")
+        const detail = result.errors[0]?.message
+        toast.error(detail ? `Upload failed: ${detail}` : "One or more files failed to sync. Please retry.")
       } else {
-        alert("Upload completed.")
+        toast.success(`${files.length} file(s) uploaded.`)
       }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Upload failed. Check storage rules and role mapping for this user."
-      alert(message)
+      toast.error(message)
     } finally {
       setUploading(false)
     }
@@ -259,18 +298,50 @@ export default function DoctorPatientPage() {
         </CardContent>
       </Card>
 
-      {(patient.lab_results?.report_uri || patient.lab_results?.report_path) && (
+      {(patient.lab_results?.report_uri ||
+        patient.lab_results?.report_path ||
+        (patient.lab_results?.files && patient.lab_results.files.length > 0)) && (
         <Card>
           <CardHeader>
             <CardTitle>Lab Report</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-2">
             {resolvedReport ? (
               <a href={resolvedReport} className="text-sm text-blue-600 underline" target="_blank" rel="noreferrer">
-                View Report
+                View Latest Report
               </a>
             ) : (
               <div className="text-sm text-muted-foreground">Report exists but URL could not be resolved.</div>
+            )}
+            {patient.lab_results?.files && patient.lab_results.files.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm font-medium">All Lab Uploads</div>
+                {patient.lab_results.files.map((f, idx) => (
+                  <div key={idx} className="rounded-md border p-2">
+                    <a
+                      href={resolvedLabFiles[idx] || ""}
+                      className="text-sm text-blue-600 underline disabled:pointer-events-none disabled:opacity-50"
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => {
+                        if (!resolvedLabFiles[idx]) e.preventDefault()
+                      }}
+                    >
+                      {f.name || `Lab File ${idx + 1}`}
+                    </a>
+                    {resolvedLabFiles[idx] && fileKind(f.name) === "image" && (
+                      <img
+                        src={resolvedLabFiles[idx]}
+                        alt={f.name || `Lab File ${idx + 1}`}
+                        className="mt-2 max-h-52 rounded-md border object-contain"
+                      />
+                    )}
+                    {resolvedLabFiles[idx] && fileKind(f.name) === "audio" && (
+                      <audio controls src={resolvedLabFiles[idx]} className="mt-2 w-full" />
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </CardContent>
         </Card>
@@ -322,10 +393,13 @@ export default function DoctorPatientPage() {
             <label className="text-sm">Upload Report</label>
             <Input
               type="file"
+              multiple
               accept="application/pdf,image/*"
               onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) uploadFile(file)
+                if (e.target.files?.length) {
+                  uploadFiles(e.target.files)
+                }
+                e.currentTarget.value = ""
               }}
               disabled={uploading}
             />
@@ -335,18 +409,29 @@ export default function DoctorPatientPage() {
             <div className="space-y-2">
               <div className="text-sm font-medium">Uploaded Files</div>
               {patient.doctor_files.map((f, idx) => (
-                <a
-                  key={idx}
-                  href={resolvedDoctorFiles[idx] || f.url || ""}
-                  className="text-sm text-blue-600 underline disabled:pointer-events-none disabled:opacity-50"
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={(e) => {
-                    if (!resolvedDoctorFiles[idx] && !f.url) e.preventDefault()
-                  }}
-                >
-                  {f.name}
-                </a>
+                <div key={idx} className="rounded-md border p-2">
+                  <a
+                    href={resolvedDoctorFiles[idx] || f.url || ""}
+                    className="text-sm text-blue-600 underline disabled:pointer-events-none disabled:opacity-50"
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => {
+                      if (!resolvedDoctorFiles[idx] && !f.url) e.preventDefault()
+                    }}
+                  >
+                    {f.name}
+                  </a>
+                  {resolvedDoctorFiles[idx] && fileKind(f.name) === "image" && (
+                    <img
+                      src={resolvedDoctorFiles[idx]}
+                      alt={f.name}
+                      className="mt-2 max-h-52 rounded-md border object-contain"
+                    />
+                  )}
+                  {resolvedDoctorFiles[idx] && fileKind(f.name) === "audio" && (
+                    <audio controls src={resolvedDoctorFiles[idx]} className="mt-2 w-full" />
+                  )}
+                </div>
               ))}
             </div>
           )}
