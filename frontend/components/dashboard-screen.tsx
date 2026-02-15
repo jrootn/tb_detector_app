@@ -81,6 +81,7 @@ export function DashboardScreen({
   const [dateFilter, setDateFilter] = useState<string>("")
   const [showOfflineWarning, setShowOfflineWarning] = useState(false)
   const stats = getStats(patients)
+  const hasPendingSync = pendingUploads > 0
 
   const filteredPatients = useMemo(() => {
     let filtered = patients
@@ -263,20 +264,34 @@ export function DashboardScreen({
             </CardContent>
           </Card>
 
-          <Card
-            className="border-l-4 border-l-amber-500 cursor-pointer"
-            onClick={() => setFilter("needsSync")}
-          >
-            <CardHeader className="p-3 pb-1">
-              <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-                <RefreshCw className="h-3.5 w-3.5 text-amber-500" />
-                {t.pendingUploads}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-3 pt-0">
-              <p className="text-2xl font-bold text-amber-600">{pendingUploads}</p>
-            </CardContent>
-          </Card>
+          {(!isOnline || hasPendingSync) ? (
+            <Card
+              className="border-l-4 border-l-amber-500 cursor-pointer"
+              onClick={() => setFilter("needsSync")}
+            >
+              <CardHeader className="p-3 pb-1">
+                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                  <RefreshCw className="h-3.5 w-3.5 text-amber-500" />
+                  {t.pendingUploads}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3 pt-0">
+                <p className="text-2xl font-bold text-amber-600">{pendingUploads}</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="border-l-4 border-l-emerald-500">
+              <CardHeader className="p-3 pb-1">
+                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                  {language === "en" ? "All Synced" : "सभी सिंक हो चुके हैं"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3 pt-0">
+                <p className="text-2xl font-bold text-emerald-600">0</p>
+              </CardContent>
+            </Card>
+          )}
 
           <Card
             className="border-l-4 border-l-sky-500 cursor-pointer"
@@ -305,7 +320,9 @@ export function DashboardScreen({
                 {[
                   { key: "all" as FilterType, label: t.all },
                   { key: "critical" as FilterType, label: t.criticalRisk },
-                  { key: "needsSync" as FilterType, label: t.needsSync },
+                  ...((!isOnline || hasPendingSync)
+                    ? [{ key: "needsSync" as FilterType, label: t.needsSync }]
+                    : []),
                   { key: "testScheduled" as FilterType, label: t.testScheduled },
                   { key: "completed" as FilterType, label: language === "en" ? "Completed" : "पूर्ण" },
                 ].map((item) => (
