@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { PatientNotesThread } from "@/components/patient-notes-thread"
 
 const AWAITING_DOCTOR = "AWAITING_DOCTOR"
 const ASSIGNED_TO_LAB = "ASSIGNED_TO_LAB"
@@ -435,6 +436,15 @@ export default function DoctorPatientPage() {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Notes Thread</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <PatientNotesThread patientId={patient.id} viewerRole="DOCTOR" />
         </CardContent>
       </Card>
     </div>

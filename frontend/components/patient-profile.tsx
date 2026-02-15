@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import { LanguageSwitcher } from "./language-switcher"
 import type { Patient, RiskLevel } from "@/lib/mockData"
+import { PatientNotesThread } from "@/components/patient-notes-thread"
 
 interface PatientProfileProps {
   patient: Patient
@@ -417,6 +418,15 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
                     </li>
                   ))}
                 </ul>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Case Notes</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <PatientNotesThread patientId={patient.id} viewerRole="ASHA" />
               </CardContent>
             </Card>
           </TabsContent>

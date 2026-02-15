@@ -7,6 +7,7 @@ import { addUpload } from "@/lib/db"
 import { syncUploads } from "@/lib/sync"
 import { resolveStorageUrl } from "@/lib/storage-utils"
 import { toast } from "sonner"
+import { useRouter } from "next/navigation"
 
 interface PatientRecord {
   id: string
@@ -31,6 +32,7 @@ function normalizeStatusCode(status?: string): string {
 }
 
 export function LabQueue() {
+  const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
   const [reportUrls, setReportUrls] = useState<Record<string, string>>({})
   const [uploadingId, setUploadingId] = useState<string | null>(null)
@@ -194,6 +196,7 @@ export function LabQueue() {
               <th className="text-left p-3">ASHA Phone</th>
               <th className="text-left p-3">Report</th>
               <th className="text-left p-3">Upload Report</th>
+              <th className="text-left p-3">Notes</th>
             </tr>
           </thead>
           <tbody>
@@ -283,11 +286,19 @@ export function LabQueue() {
                     }}
                   />
                 </td>
+                <td className="p-3">
+                  <button
+                    className="rounded border px-2 py-1 text-xs hover:bg-muted"
+                    onClick={() => router.push(`/lab/patient/${p.id}`)}
+                  >
+                    Open
+                  </button>
+                </td>
               </tr>
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td className="p-6 text-center text-muted-foreground" colSpan={7}>
+                <td className="p-6 text-center text-muted-foreground" colSpan={8}>
                   No patients in queue
                 </td>
               </tr>
