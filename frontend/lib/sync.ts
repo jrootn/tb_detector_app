@@ -1,7 +1,7 @@
 import { getAllPatients, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
 import type { Patient } from "@/lib/mockData"
 import { auth, db, storage } from "@/lib/firebase"
-import { doc, updateDoc, arrayUnion, setDoc } from "firebase/firestore"
+import { doc, updateDoc, arrayUnion, setDoc, getDoc, collection, getDocs } from "firebase/firestore"
 import { ref, uploadBytes } from "firebase/storage"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
@@ -15,6 +15,14 @@ interface UploadSyncResult {
   uploaded: number
   failed: number
   errors: Array<{ id: string; message: string }>
+}
+
+interface AssignmentContext {
+  facilityId?: string
+  facilityName?: string
+  tuId?: string
+  assignedDoctorId?: string
+  assignedLabTechId?: string
 }
 
 function getErrorCode(error: unknown): string | undefined {
@@ -90,7 +98,7 @@ function mapFeverToApi(value?: Patient["feverHistory"]): string | null {
   }
 }
 
-function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string) {
+function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string, assignment?: AssignmentContext) {
   return {
     patient_local_id: patient.id,
     device_id: "web-app",
@@ -131,6 +139,12 @@ function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string) {
       triage_status: mapStatusToApi(patient.status),
     },
     sample_id: patient.sampleId || null,
+    facility_id: assignment?.facilityId || null,
+    facility_name: assignment?.facilityName || null,
+    tu_id: assignment?.tuId || null,
+    assignment_mode: assignment?.facilityId ? "FACILITY_TAGGING" : null,
+    assigned_doctor_id: assignment?.assignedDoctorId || null,
+    assigned_lab_tech_id: assignment?.assignedLabTechId || null,
   }
 }
 
@@ -140,7 +154,7 @@ function getRiskLevel(score: number): "HIGH" | "MEDIUM" | "LOW" {
   return "LOW"
 }
 
-function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string) {
+function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, assignment?: AssignmentContext) {
   const riskScore = Number(patient.riskScore || 0)
   const hearScore = Number(patient.hearAudioScore ?? Math.max(0, Math.min(1, riskScore / 10)))
   return {
@@ -194,14 +208,53 @@ function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string) {
       triage_status: mapStatusToApi(patient.status),
     },
     sample_id: patient.sampleId || null,
+    facility_id: assignment?.facilityId || null,
+    facility_name: assignment?.facilityName || null,
+    tu_id: assignment?.tuId || null,
+    assignment_mode: assignment?.facilityId ? "FACILITY_TAGGING" : null,
+    assigned_doctor_id: assignment?.assignedDoctorId || null,
+    assigned_lab_tech_id: assignment?.assignedLabTechId || null,
   }
 }
 
-async function syncPatientsDirectToFirestore(pending: Patient[], ashaWorkerId: string): Promise<Set<string>> {
+async function resolveAssignmentContext(ashaWorkerId: string): Promise<AssignmentContext> {
+  const result: AssignmentContext = {}
+  try {
+    const ashaSnap = await getDoc(doc(db, "users", ashaWorkerId))
+    if (!ashaSnap.exists()) return result
+    const ashaData = ashaSnap.data() as { facility_id?: string; facility_name?: string; tu_id?: string }
+    if (!ashaData.facility_id) return result
+
+    result.facilityId = ashaData.facility_id
+    result.facilityName = ashaData.facility_name
+    result.tuId = ashaData.tu_id
+
+    const usersSnap = await getDocs(collection(db, "users"))
+    for (const userDoc of usersSnap.docs) {
+      const user = userDoc.data() as { role?: string; facility_id?: string }
+      if (!result.assignedDoctorId && user.role === "DOCTOR" && user.facility_id === ashaData.facility_id) {
+        result.assignedDoctorId = userDoc.id
+      }
+      if (!result.assignedLabTechId && user.role === "LAB_TECH" && user.facility_id === ashaData.facility_id) {
+        result.assignedLabTechId = userDoc.id
+      }
+      if (result.assignedDoctorId && result.assignedLabTechId) break
+    }
+  } catch (error) {
+    console.warn("Could not resolve assignment context", error)
+  }
+  return result
+}
+
+async function syncPatientsDirectToFirestore(
+  pending: Patient[],
+  ashaWorkerId: string,
+  assignment?: AssignmentContext
+): Promise<Set<string>> {
   const syncedIds = new Set<string>()
   for (const patient of pending) {
     try {
-      const payload = buildDirectFirestorePayload(patient, ashaWorkerId)
+      const payload = buildDirectFirestorePayload(patient, ashaWorkerId, assignment)
       await setDoc(doc(db, "patients", patient.id), payload, { merge: true })
       syncedIds.add(patient.id)
     } catch (error) {
@@ -214,15 +267,16 @@ async function syncPatientsDirectToFirestore(pending: Patient[], ashaWorkerId: s
 export async function syncData(options: { uploadsOnly?: boolean } = {}) {
   if (!navigator.onLine) return
 
-  const currentUser = auth.currentUser
-  if (!currentUser) return
+    const currentUser = auth.currentUser
+    if (!currentUser) return
 
-  try {
-    const idToken = await currentUser.getIdToken()
-    const patients = await getAllPatients()
-    const pending = patients.filter((p) => p.needsSync)
-    const records = pending.map((p) => mapPatientToSyncRecord(p, currentUser.uid))
-    const syncedIds = new Set<string>()
+    try {
+      const idToken = await currentUser.getIdToken()
+      const assignment = await resolveAssignmentContext(currentUser.uid)
+      const patients = await getAllPatients()
+      const pending = patients.filter((p) => p.needsSync)
+      const records = pending.map((p) => mapPatientToSyncRecord(p, currentUser.uid, assignment))
+      const syncedIds = new Set<string>()
 
     if (!options.uploadsOnly && records.length > 0) {
       let syncedViaBackend = false
@@ -246,7 +300,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
       }
 
       if (!syncedViaBackend) {
-        const directSynced = await syncPatientsDirectToFirestore(pending, currentUser.uid)
+        const directSynced = await syncPatientsDirectToFirestore(pending, currentUser.uid, assignment)
         directSynced.forEach((id) => syncedIds.add(id))
       }
 

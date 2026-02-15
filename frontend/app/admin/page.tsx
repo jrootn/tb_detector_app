@@ -5,18 +5,14 @@ import { onAuthStateChanged, signOut } from "firebase/auth"
 import { doc, getDoc } from "firebase/firestore"
 import { useRouter } from "next/navigation"
 import { auth, db } from "@/lib/firebase"
-import { LabQueue } from "@/components/lab-queue"
-import { useAutoSync } from "@/hooks/useAutoSync"
 import { Button } from "@/components/ui/button"
+import { AdminDashboard } from "@/components/admin-dashboard"
 
-export default function LabPage() {
+export default function AdminPage() {
   const router = useRouter()
   const [ready, setReady] = useState(false)
   const [isOnline, setIsOnline] = useState(true)
-  const [labName, setLabName] = useState("Lab")
-  const [labUid, setLabUid] = useState("")
-  const [labFacilityId, setLabFacilityId] = useState("")
-  useAutoSync(true)
+  const [adminName, setAdminName] = useState("Admin")
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -26,17 +22,14 @@ export default function LabPage() {
       }
       try {
         const snap = await getDoc(doc(db, "users", user.uid))
-        if (snap.data()?.role !== "LAB_TECH") {
+        if (snap.data()?.role !== "ADMIN") {
           router.replace("/login")
           return
         }
-        setLabName(snap.data()?.name || "Lab")
-        setLabUid(user.uid)
-        setLabFacilityId(snap.data()?.facility_id || snap.data()?.assigned_center || "")
+        setAdminName(snap.data()?.name || "Admin")
         setReady(true)
-      } catch (error) {
+      } catch {
         router.replace("/login")
-        return
       }
     })
     return () => unsub()
@@ -58,16 +51,12 @@ export default function LabPage() {
   return (
     <div>
       <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-card px-4 py-3">
-        <div className="text-sm font-medium">{labName} Queue</div>
+        <div className="text-sm font-medium">{adminName} - Block Monitoring Admin</div>
         <div className="flex items-center gap-2">
           <span className={`text-xs ${isOnline ? "text-emerald-600" : "text-amber-600"}`}>
             {isOnline ? "Online" : "Offline"}
           </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => router.push("/lab/profile")}
-          >
+          <Button variant="outline" size="sm" onClick={() => router.push("/admin/profile")}>
             Profile
           </Button>
           <Button
@@ -85,11 +74,9 @@ export default function LabPage() {
         </div>
       </div>
       {!isOnline ? (
-        <div className="p-6 text-sm text-muted-foreground">
-          Lab portal requires internet access. Please go online.
-        </div>
+        <div className="p-6 text-sm text-muted-foreground">Admin dashboard requires internet access.</div>
       ) : (
-        <LabQueue labUid={labUid} facilityId={labFacilityId} />
+        <AdminDashboard />
       )}
     </div>
   )

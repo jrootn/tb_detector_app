@@ -29,9 +29,16 @@ interface PatientRecord {
   ai?: { risk_score?: number; medgemini_summary?: string }
   doctor_priority?: boolean
   doctor_rank?: number
+  assigned_doctor_id?: string
+  facility_id?: string
   status?: { triage_status?: string }
   sample_id?: string
   created_at_offline?: string
+}
+
+interface DoctorDashboardProps {
+  doctorUid: string
+  facilityId?: string
 }
 
 function normalizeName(name?: string) {
@@ -48,7 +55,7 @@ function normalizeStatusCode(status?: string): string {
   return normalized
 }
 
-export function DoctorDashboard() {
+export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps) {
   const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
   const [view, setView] = useState<"list" | "map" | "analytics">("list")
@@ -89,9 +96,18 @@ export function DoctorDashboard() {
     }
   }, [])
 
+  const visiblePatients = useMemo(() => {
+    return patients.filter((p) => {
+      if (p.assigned_doctor_id) return p.assigned_doctor_id === doctorUid
+      if (facilityId && p.facility_id) return p.facility_id === facilityId
+      // Keep legacy records visible until migrated.
+      return !p.assigned_doctor_id && !p.facility_id
+    })
+  }, [patients, doctorUid, facilityId])
+
   const filtered = useMemo(() => {
     const now = new Date()
-    return patients.filter((p) => {
+    return visiblePatients.filter((p) => {
       if (statusFilter !== "all" && normalizeStatusCode(p.status?.triage_status) !== statusFilter) {
         return false
       }
@@ -126,7 +142,7 @@ export function DoctorDashboard() {
       }
       return true
     })
-  }, [patients, filter, specificDate, statusFilter, search])
+  }, [visiblePatients, filter, specificDate, statusFilter, search])
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
@@ -324,7 +340,7 @@ export function DoctorDashboard() {
 
       <div className="flex flex-wrap gap-2 items-center">
         <span className="text-sm text-muted-foreground">
-          Total: {patients.length} | Showing: {sorted.length}
+          Scope: {visiblePatients.length} | Showing: {sorted.length}
         </span>
         <Input
           placeholder="Search by name or sample ID"
@@ -454,7 +470,7 @@ export function DoctorDashboard() {
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs">
                   <span className="rounded-full bg-white/15 px-3 py-1">Filtered cohort: {sorted.length}</span>
-                  <span className="rounded-full bg-white/15 px-3 py-1">All patients: {patients.length}</span>
+                  <span className="rounded-full bg-white/15 px-3 py-1">In scope: {visiblePatients.length}</span>
                   <span className="rounded-full bg-white/15 px-3 py-1">Status: {statusFilter}</span>
                   <span className="rounded-full bg-white/15 px-3 py-1">Date: {dateFilterLabel}</span>
                 </div>

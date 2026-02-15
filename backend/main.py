@@ -33,6 +33,38 @@ if not os.environ.get("FIREBASE_APP_INITIALIZED"):
     os.environ["FIREBASE_APP_INITIALIZED"] = "1"
 
 db = firestore.client()
+_user_cache: Dict[str, Dict[str, Any]] = {}
+_doctor_by_facility_cache: Dict[str, Optional[str]] = {}
+_lab_by_facility_cache: Dict[str, Optional[str]] = {}
+
+
+def get_user_doc(uid: Optional[str]) -> Dict[str, Any]:
+    if not uid:
+        return {}
+    if uid in _user_cache:
+        return _user_cache[uid]
+    snap = db.collection("users").document(uid).get()
+    data = snap.to_dict() if snap.exists else {}
+    _user_cache[uid] = data or {}
+    return _user_cache[uid]
+
+
+def get_assignee_for_facility(facility_id: Optional[str], role: str) -> Optional[str]:
+    if not facility_id:
+        return None
+    cache = _doctor_by_facility_cache if role == "DOCTOR" else _lab_by_facility_cache
+    if facility_id in cache:
+        return cache[facility_id]
+
+    query_result = db.collection("users").where("role", "==", role).stream()
+    selected_uid = None
+    for doc_snapshot in query_result:
+        data = doc_snapshot.to_dict() or {}
+        if data.get("facility_id") == facility_id:
+            selected_uid = doc_snapshot.id
+            break
+    cache[facility_id] = selected_uid
+    return selected_uid
 
 
 # ----------------------
@@ -255,7 +287,23 @@ async def sync_patients(request: Request, _: Dict[str, Any] = Depends(verify_fir
             record.asha_id = record.asha_worker_id
         record.ai = ai_result
 
-        doc_ref.set(record.model_dump(), merge=True)
+        asha_doc = get_user_doc(record.asha_id or record.asha_worker_id)
+        facility_id = asha_doc.get("facility_id")
+        tu_id = asha_doc.get("tu_id")
+        facility_name = asha_doc.get("facility_name")
+        assigned_doctor_id = get_assignee_for_facility(facility_id, "DOCTOR")
+        assigned_lab_tech_id = get_assignee_for_facility(facility_id, "LAB_TECH")
+
+        payload = record.model_dump()
+        if facility_id:
+            payload["facility_id"] = facility_id
+            payload["facility_name"] = facility_name
+            payload["tu_id"] = tu_id
+            payload["assignment_mode"] = "FACILITY_TAGGING"
+            payload["assigned_doctor_id"] = assigned_doctor_id
+            payload["assigned_lab_tech_id"] = assigned_lab_tech_id
+
+        doc_ref.set(payload, merge=True)
 
         if exists:
             updated += 1

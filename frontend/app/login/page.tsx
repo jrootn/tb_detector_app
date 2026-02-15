@@ -37,6 +37,7 @@ export default function LoginPage() {
       if (role === "ASHA") router.replace("/asha")
       else if (role === "DOCTOR") router.replace("/doctor")
       else if (role === "LAB_TECH") router.replace("/lab")
+      else if (role === "ADMIN") router.replace("/admin")
       else setError("No role assigned to this user")
     } catch (err) {
       setError("Invalid credentials or missing role")

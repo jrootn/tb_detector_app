@@ -14,6 +14,8 @@ export default function DoctorPage() {
   const [ready, setReady] = useState(false)
   const [isOnline, setIsOnline] = useState(true)
   const [doctorName, setDoctorName] = useState("Doctor")
+  const [doctorUid, setDoctorUid] = useState("")
+  const [doctorFacilityId, setDoctorFacilityId] = useState("")
 
   useAutoSync(true)
 
@@ -30,6 +32,8 @@ export default function DoctorPage() {
           return
         }
         setDoctorName(snap.data()?.name || "Doctor")
+        setDoctorUid(user.uid)
+        setDoctorFacilityId(snap.data()?.facility_id || snap.data()?.assigned_center || "")
         setReady(true)
       } catch (error) {
         router.replace("/login")
@@ -86,7 +90,7 @@ export default function DoctorPage() {
           Doctor portal requires internet access. Please go online.
         </div>
       ) : (
-        <DoctorDashboard />
+        <DoctorDashboard doctorUid={doctorUid} facilityId={doctorFacilityId} />
       )}
     </div>
   )

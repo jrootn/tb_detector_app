@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
-type AppRole = "ASHA" | "DOCTOR" | "LAB_TECH"
+type AppRole = "ASHA" | "DOCTOR" | "LAB_TECH" | "ADMIN"
 
 interface UserProfileSettingsProps {
   expectedRole?: AppRole
@@ -319,4 +319,3 @@ export function UserProfileSettings({ expectedRole, title = "My Profile", onBack
     </div>
   )
 }
-

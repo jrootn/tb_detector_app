@@ -14,6 +14,8 @@ interface PatientRecord {
   demographics?: { name?: string }
   ai?: { risk_score?: number }
   status?: { triage_status?: string }
+  facility_id?: string
+  assigned_lab_tech_id?: string
   lab_results?: { report_path?: string; report_uri?: string; files?: { report_path?: string; report_uri?: string }[] }
   created_at_offline?: string
   doctor_priority?: boolean
@@ -30,6 +32,11 @@ interface AshaUserInfo {
   phone?: string
 }
 
+interface LabQueueProps {
+  labUid: string
+  facilityId?: string
+}
+
 function normalizeStatusCode(status?: string): string {
   if (!status) return "AWAITING_DOCTOR"
   const normalized = status.toUpperCase()
@@ -39,7 +46,7 @@ function normalizeStatusCode(status?: string): string {
   return normalized
 }
 
-export function LabQueue() {
+export function LabQueue({ labUid, facilityId }: LabQueueProps) {
   const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
   const [ashaUsers, setAshaUsers] = useState<Record<string, AshaUserInfo>>({})
@@ -107,8 +114,17 @@ export function LabQueue() {
     }
   }, [patients])
 
+  const scopedPatients = useMemo(() => {
+    return patients.filter((p) => {
+      if (p.assigned_lab_tech_id) return p.assigned_lab_tech_id === labUid
+      if (facilityId && p.facility_id) return p.facility_id === facilityId
+      // Keep legacy records visible until migrated.
+      return !p.assigned_lab_tech_id && !p.facility_id
+    })
+  }, [patients, labUid, facilityId])
+
   const ordered = useMemo(() => {
-    return [...patients].sort((a, b) => {
+    return [...scopedPatients].sort((a, b) => {
       const aPriority = a.doctor_priority ? 1 : 0
       const bPriority = b.doctor_priority ? 1 : 0
       if (aPriority !== bPriority) return bPriority - aPriority
@@ -119,7 +135,7 @@ export function LabQueue() {
       const bScore = b.ai?.risk_score ?? 0
       return bScore - aScore
     })
-  }, [patients])
+  }, [scopedPatients])
 
   const filtered = useMemo(() => {
     const now = new Date()
