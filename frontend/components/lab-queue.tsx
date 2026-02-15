@@ -19,7 +19,15 @@ interface PatientRecord {
   doctor_priority?: boolean
   doctor_rank?: number
   sample_id?: string
+  asha_id?: string
+  asha_worker_id?: string
   asha_phone_number?: string
+}
+
+interface AshaUserInfo {
+  id: string
+  name?: string
+  phone?: string
 }
 
 function normalizeStatusCode(status?: string): string {
@@ -34,6 +42,7 @@ function normalizeStatusCode(status?: string): string {
 export function LabQueue() {
   const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
+  const [ashaUsers, setAshaUsers] = useState<Record<string, AshaUserInfo>>({})
   const [reportUrls, setReportUrls] = useState<Record<string, string>>({})
   const [uploadingId, setUploadingId] = useState<string | null>(null)
   const [filter, setFilter] = useState<"queue" | "done" | "all">("queue")
@@ -50,6 +59,25 @@ export function LabQueue() {
         setPatients(rows)
       },
       (error) => console.error("Failed to load lab queue", error)
+    )
+    return () => unsub()
+  }, [])
+
+  useEffect(() => {
+    const usersQuery = query(collection(db, "users"))
+    const unsub = onSnapshot(
+      usersQuery,
+      (snap) => {
+        const next: Record<string, AshaUserInfo> = {}
+        snap.docs.forEach((d) => {
+          const data = d.data() as { role?: string; name?: string; phone?: string }
+          if (data.role === "ASHA") {
+            next[d.id] = { id: d.id, name: data.name, phone: data.phone }
+          }
+        })
+        setAshaUsers(next)
+      },
+      (error) => console.error("Failed to load ASHA users", error)
     )
     return () => unsub()
   }, [])
@@ -131,6 +159,17 @@ export function LabQueue() {
     })
   }, [ordered, filter, dateFilter, specificDate, minScore])
 
+  const getAshaUid = (patient: PatientRecord) => patient.asha_id || patient.asha_worker_id || ""
+  const getAshaName = (patient: PatientRecord) => {
+    const uid = getAshaUid(patient)
+    if (!uid) return "Unknown"
+    return ashaUsers[uid]?.name || `ASHA ${uid.slice(0, 6)}`
+  }
+  const getAshaPhone = (patient: PatientRecord) => {
+    const uid = getAshaUid(patient)
+    return ashaUsers[uid]?.phone || patient.asha_phone_number || "-"
+  }
+
   return (
     <div className="min-h-screen p-4 bg-background">
       <h1 className="text-xl font-semibold mb-4">Lab Queue</h1>
@@ -174,16 +213,19 @@ export function LabQueue() {
           />
         )}
 
-        <input
-          type="number"
-          min={0}
-          max={10}
-          step={0.5}
-          value={minScore}
-          onChange={(e) => setMinScore(Number(e.target.value))}
-          className="px-2 py-1 text-sm border rounded w-28"
-          placeholder="Min score"
-        />
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span>Min AI Score</span>
+          <input
+            type="number"
+            min={0}
+            max={10}
+            step={0.5}
+            value={minScore}
+            onChange={(e) => setMinScore(Number(e.target.value))}
+            className="px-2 py-1 text-sm border rounded w-28 bg-background text-foreground"
+            placeholder="0-10"
+          />
+        </label>
       </div>
         <div className="overflow-x-auto border rounded-lg">
           <table className="w-full text-sm">
@@ -193,6 +235,7 @@ export function LabQueue() {
               <th className="text-left p-3">Patient</th>
               <th className="text-left p-3">AI Risk</th>
               <th className="text-left p-3">Status</th>
+              <th className="text-left p-3">ASHA Worker</th>
               <th className="text-left p-3">ASHA Phone</th>
               <th className="text-left p-3">Report</th>
               <th className="text-left p-3">Upload Report</th>
@@ -216,7 +259,19 @@ export function LabQueue() {
                     ? "LAB_DONE"
                     : normalizeStatusCode(p.status?.triage_status)}
                 </td>
-                <td className="p-3">{p.asha_phone_number || "-"}</td>
+                <td className="p-3">
+                  {getAshaUid(p) ? (
+                    <button
+                      className="text-blue-600 underline hover:text-blue-700"
+                      onClick={() => router.push(`/lab/asha/${getAshaUid(p)}`)}
+                    >
+                      {getAshaName(p)}
+                    </button>
+                  ) : (
+                    "Unknown"
+                  )}
+                </td>
+                <td className="p-3">{getAshaPhone(p)}</td>
                 <td className="p-3">
                   {reportUrls[p.id] ? (
                     <a
@@ -298,7 +353,7 @@ export function LabQueue() {
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td className="p-6 text-center text-muted-foreground" colSpan={8}>
+                <td className="p-6 text-center text-muted-foreground" colSpan={9}>
                   No patients in queue
                 </td>
               </tr>
