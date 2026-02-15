@@ -7,11 +7,12 @@ import { DashboardScreen } from "./dashboard-screen"
 import { ScreeningFlow } from "./screening-flow"
 import { PatientProfile } from "./patient-profile"
 import { PriorityView } from "./priority-view"
+import { UserProfileSettings } from "./user-profile-settings"
 import { mockPatients, type Patient } from "@/lib/mockData"
 import { getAllPatients, savePatients, seedPatientsIfEmpty, getPendingUploadCount } from "@/lib/db"
 import { syncData } from "@/lib/sync"
 
-type Screen = "login" | "dashboard" | "screening" | "profile" | "priority"
+type Screen = "login" | "dashboard" | "screening" | "profile" | "priority" | "settings"
 
 interface GPSLocation {
   latitude: number | null
@@ -219,6 +220,7 @@ export function AppShell({
             onNewScreening={() => setCurrentScreen("screening")}
             onViewPatient={handleViewPatient}
             onViewPriority={() => setCurrentScreen("priority")}
+            onOpenProfile={() => setCurrentScreen("settings")}
             gpsLocation={gpsLocation}
           />
         )}
@@ -246,6 +248,14 @@ export function AppShell({
             patients={patients.filter((p) => p.riskLevel === "high" || p.riskLevel === "medium")}
             onBack={() => setCurrentScreen("dashboard")}
             onViewPatient={handleViewPatient}
+          />
+        )}
+
+        {currentScreen === "settings" && (
+          <UserProfileSettings
+            expectedRole="ASHA"
+            title="ASHA Profile"
+            onBack={() => setCurrentScreen("dashboard")}
           />
         )}
       </div>

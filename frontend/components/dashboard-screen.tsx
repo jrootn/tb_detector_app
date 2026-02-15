@@ -36,6 +36,7 @@ import {
   Wifi,
   WifiOff,
   CalendarDays,
+  UserCircle2,
 } from "lucide-react"
 import { LanguageSwitcher } from "./language-switcher"
 import { getStats, type Patient, type RiskLevel } from "@/lib/mockData"
@@ -56,6 +57,7 @@ interface DashboardScreenProps {
   onNewScreening: () => void
   onViewPatient: (patient: Patient) => void
   onViewPriority: () => void
+  onOpenProfile: () => void
   gpsLocation: GPSLocation
 }
 
@@ -71,6 +73,7 @@ export function DashboardScreen({
   onNewScreening,
   onViewPatient,
   onViewPriority,
+  onOpenProfile,
   gpsLocation,
 }: DashboardScreenProps) {
   const { t, language } = useLanguage()
@@ -182,6 +185,14 @@ export function DashboardScreen({
               </>
             )}
           </div>
+          <Button 
+            variant="ghost"
+            size="icon"
+            onClick={onOpenProfile}
+          >
+            <UserCircle2 className="h-5 w-5" />
+            <span className="sr-only">Profile</span>
+          </Button>
           <Button 
             variant="ghost" 
             size="icon" 

@@ -62,6 +62,13 @@ export default function LabPage() {
           <Button
             variant="outline"
             size="sm"
+            onClick={() => router.push("/lab/profile")}
+          >
+            Profile
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={async () => {
               if (!isOnline) return
               await signOut(auth)
