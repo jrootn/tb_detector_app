@@ -1,0 +1,160 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserPath() {
+      return /databases/$(db)/documents/users/$(request.auth.uid);
+    }
+
+    function hasCurrentUserDoc() {
+      return signedIn() && exists(currentUserPath());
+    }
+
+    function currentUserData() {
+      return get(currentUserPath()).data;
+    }
+
+    function role() {
+      let u = hasCurrentUserDoc() ? currentUserData() : null;
+      return (u != null && ("role" in u)) ? u.role : "";
+    }
+
+    function isAdmin() {
+      return role() == "ADMIN";
+    }
+
+    function isDoctor() {
+      return role() == "DOCTOR";
+    }
+
+    function isLab() {
+      return role() == "LAB_TECH";
+    }
+
+    function isAsha() {
+      return role() == "ASHA";
+    }
+
+    function triageAllowed(code) {
+      return code in [
+        "AWAITING_DOCTOR",
+        "TEST_PENDING",
+        "ASSIGNED_TO_LAB",
+        "LAB_DONE",
+        "UNDER_TREATMENT",
+        "CLEARED"
+      ];
+    }
+
+    function validStatusMap(data) {
+      return !("status" in data)
+        || (
+          data.status is map
+          && (
+            !("triage_status" in data.status)
+            || triageAllowed(data.status.triage_status)
+          )
+        );
+    }
+
+    function ashaOwnsPatient(data) {
+      return ("asha_id" in data) && data.asha_id == request.auth.uid;
+    }
+
+    function doctorAssigned(data) {
+      return ("assigned_doctor_id" in data) && data.assigned_doctor_id == request.auth.uid;
+    }
+
+    function labAssigned(data) {
+      return ("assigned_lab_tech_id" in data) && data.assigned_lab_tech_id == request.auth.uid;
+    }
+
+    function canReadPatient(data) {
+      return isAdmin()
+        || (isDoctor() && doctorAssigned(data))
+        || (isLab() && labAssigned(data))
+        || (isAsha() && ashaOwnsPatient(data));
+    }
+
+    function patientPath(id) {
+      return /databases/$(db)/documents/patients/$(id);
+    }
+
+    function canReadPatientById(id) {
+      return exists(patientPath(id)) && canReadPatient(get(patientPath(id)).data);
+    }
+
+    function hasPatientCreateCoreFields(data) {
+      return data.keys().hasAll(["asha_id", "demographics", "status", "created_at_offline"]);
+    }
+
+    match /facilities/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /users/{uid} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
+
+      // Self-service profile updates only; role/email are immutable from clients.
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(["phone", "address", "preferred_language", "profile_photo_data_url", "updated_at"]);
+
+      allow create, delete: if false;
+    }
+
+    match /patients/{id} {
+      allow read: if canReadPatient(resource.data);
+
+      allow create: if hasPatientCreateCoreFields(request.resource.data)
+        && validStatusMap(request.resource.data)
+        && (
+          isDoctor()
+          || (isAsha() && ashaOwnsPatient(request.resource.data))
+        );
+
+      allow update: if
+        (
+          isDoctor()
+          && doctorAssigned(resource.data)
+          && validStatusMap(request.resource.data)
+        )
+        || (
+          isAsha()
+          && ashaOwnsPatient(resource.data)
+          && validStatusMap(request.resource.data)
+        )
+        || (
+          isLab()
+          && labAssigned(resource.data)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(["lab_results", "status", "synced_at"])
+          && validStatusMap(request.resource.data)
+        )
+        || (
+          isAdmin()
+          && request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly(["assigned_doctor_id", "assigned_lab_tech_id", "rank", "doctor_priority", "doctor_rank", "status"])
+          && validStatusMap(request.resource.data)
+        );
+
+      allow delete: if false;
+    }
+
+    match /patients/{id}/notes/{noteId} {
+      allow read: if canReadPatientById(id);
+      allow create: if canReadPatientById(id);
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

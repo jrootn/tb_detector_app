@@ -410,6 +410,7 @@ def build_patient(
         "device_id": f"device-{random.randint(100, 999)}",
         "asha_id": asha_uid,
         "asha_worker_id": asha_uid,
+        "asha_name": asha_profile.get("name"),
         "asha_phone_number": asha_profile.get("phone"),
         "sample_id": sample_id,
         "created_at_offline": created_at,

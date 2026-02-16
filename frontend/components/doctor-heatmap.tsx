@@ -9,10 +9,13 @@ interface DoctorHeatmapPatient {
   gps?: { lat?: number; lng?: number }
   ai?: { risk_score?: number }
   sample_id?: string
+  facility_name?: string
 }
 
 interface DoctorHeatmapProps {
   patients: DoctorHeatmapPatient[]
+  profileBasePath?: string
+  showFacility?: boolean
 }
 
 function escapeHtml(value: string): string {
@@ -29,7 +32,11 @@ function normalizeName(name?: string): string {
   return name.replace(/\s+\d+$/, "")
 }
 
-export default function DoctorHeatmap({ patients }: DoctorHeatmapProps) {
+export default function DoctorHeatmap({
+  patients,
+  profileBasePath = "/doctor/patient",
+  showFacility = false,
+}: DoctorHeatmapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const layerRef = useRef<L.LayerGroup | null>(null)
@@ -78,7 +85,8 @@ export default function DoctorHeatmap({ patients }: DoctorHeatmapProps) {
       .forEach((p) => {
         const score = p.ai?.risk_score ?? 0
         const safeName = escapeHtml(normalizeName(p.demographics?.name))
-        const profileUrl = `/doctor/patient/${encodeURIComponent(p.id)}`
+        const safeFacility = escapeHtml(p.facility_name || "-")
+        const profileUrl = `${profileBasePath}/${encodeURIComponent(p.id)}`
         const color = score >= 8 ? "#ef4444" : score >= 4 ? "#f59e0b" : "#10b981"
         const lat = p.gps!.lat!
         const lng = p.gps!.lng!
@@ -110,6 +118,7 @@ export default function DoctorHeatmap({ patients }: DoctorHeatmapProps) {
               <div><strong>${safeName}</strong></div>
               <div>Sample: ${p.sample_id || "-"}</div>
               <div>Risk: ${score}</div>
+              ${showFacility ? `<div>Facility: ${safeFacility}</div>` : ""}
               <div style="margin-top:6px;">
                 <a href="${profileUrl}" style="color:#0f766e; font-weight:600; text-decoration:underline;">Open Profile</a>
               </div>

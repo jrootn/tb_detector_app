@@ -28,6 +28,7 @@ import {
   Activity,
   AlertTriangle,
   Calendar,
+  CheckCircle2,
   CloudOff,
   LogOut,
   MapPin,

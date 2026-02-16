@@ -21,6 +21,8 @@ interface AssignmentContext {
   facilityId?: string
   facilityName?: string
   tuId?: string
+  ashaName?: string
+  ashaPhone?: string
   assignedDoctorId?: string
   assignedLabTechId?: string
 }
@@ -145,6 +147,8 @@ function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string, assignme
     assignment_mode: assignment?.facilityId ? "FACILITY_TAGGING" : null,
     assigned_doctor_id: assignment?.assignedDoctorId || null,
     assigned_lab_tech_id: assignment?.assignedLabTechId || null,
+    asha_name: assignment?.ashaName || null,
+    asha_phone_number: assignment?.ashaPhone || null,
   }
 }
 
@@ -214,6 +218,8 @@ function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, ass
     assignment_mode: assignment?.facilityId ? "FACILITY_TAGGING" : null,
     assigned_doctor_id: assignment?.assignedDoctorId || null,
     assigned_lab_tech_id: assignment?.assignedLabTechId || null,
+    asha_name: assignment?.ashaName || null,
+    asha_phone_number: assignment?.ashaPhone || null,
   }
 }
 
@@ -222,12 +228,20 @@ async function resolveAssignmentContext(ashaWorkerId: string): Promise<Assignmen
   try {
     const ashaSnap = await getDoc(doc(db, "users", ashaWorkerId))
     if (!ashaSnap.exists()) return result
-    const ashaData = ashaSnap.data() as { facility_id?: string; facility_name?: string; tu_id?: string }
+    const ashaData = ashaSnap.data() as {
+      facility_id?: string
+      facility_name?: string
+      tu_id?: string
+      name?: string
+      phone?: string
+    }
     if (!ashaData.facility_id) return result
 
     result.facilityId = ashaData.facility_id
     result.facilityName = ashaData.facility_name
     result.tuId = ashaData.tu_id
+    result.ashaName = ashaData.name
+    result.ashaPhone = ashaData.phone
 
     const usersSnap = await getDocs(collection(db, "users"))
     for (const userDoc of usersSnap.docs) {

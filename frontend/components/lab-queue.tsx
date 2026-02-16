@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { collection, onSnapshot, query } from "firebase/firestore"
+import { collection, onSnapshot, query, where } from "firebase/firestore"
 import { db, auth } from "@/lib/firebase"
 import { addUpload } from "@/lib/db"
 import { syncUploads } from "@/lib/sync"
@@ -23,13 +23,8 @@ interface PatientRecord {
   sample_id?: string
   asha_id?: string
   asha_worker_id?: string
+  asha_name?: string
   asha_phone_number?: string
-}
-
-interface AshaUserInfo {
-  id: string
-  name?: string
-  phone?: string
 }
 
 interface LabQueueProps {
@@ -49,45 +44,31 @@ function normalizeStatusCode(status?: string): string {
 export function LabQueue({ labUid, facilityId }: LabQueueProps) {
   const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
-  const [ashaUsers, setAshaUsers] = useState<Record<string, AshaUserInfo>>({})
   const [reportUrls, setReportUrls] = useState<Record<string, string>>({})
   const [uploadingId, setUploadingId] = useState<string | null>(null)
+  const [permissionError, setPermissionError] = useState<string | null>(null)
   const [filter, setFilter] = useState<"queue" | "done" | "all">("queue")
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "30days" | "date">("all")
   const [specificDate, setSpecificDate] = useState("")
   const [minScore, setMinScore] = useState(0)
 
   useEffect(() => {
-    const q = query(collection(db, "patients"))
+    if (!labUid) return
+    const q = query(collection(db, "patients"), where("assigned_lab_tech_id", "==", labUid))
     const unsub = onSnapshot(
       q,
       (snap) => {
         const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as PatientRecord) }))
         setPatients(rows)
+        setPermissionError(null)
       },
-      (error) => console.error("Failed to load lab queue", error)
+      (error) => {
+        console.error("Failed to load lab queue", error)
+        setPermissionError("Lab queue permissions are blocked. Check Firestore rules for assigned_lab_tech_id read access.")
+      }
     )
     return () => unsub()
-  }, [])
-
-  useEffect(() => {
-    const usersQuery = query(collection(db, "users"))
-    const unsub = onSnapshot(
-      usersQuery,
-      (snap) => {
-        const next: Record<string, AshaUserInfo> = {}
-        snap.docs.forEach((d) => {
-          const data = d.data() as { role?: string; name?: string; phone?: string }
-          if (data.role === "ASHA") {
-            next[d.id] = { id: d.id, name: data.name, phone: data.phone }
-          }
-        })
-        setAshaUsers(next)
-      },
-      (error) => console.error("Failed to load ASHA users", error)
-    )
-    return () => unsub()
-  }, [])
+  }, [labUid])
 
   useEffect(() => {
     let alive = true
@@ -179,16 +160,20 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
   const getAshaName = (patient: PatientRecord) => {
     const uid = getAshaUid(patient)
     if (!uid) return "Unknown"
-    return ashaUsers[uid]?.name || `ASHA ${uid.slice(0, 6)}`
+    return patient.asha_name || `ASHA ${uid.slice(0, 6)}`
   }
   const getAshaPhone = (patient: PatientRecord) => {
-    const uid = getAshaUid(patient)
-    return ashaUsers[uid]?.phone || patient.asha_phone_number || "-"
+    return patient.asha_phone_number || "-"
   }
 
   return (
     <div className="min-h-screen p-4 bg-background">
       <h1 className="text-xl font-semibold mb-4">Lab Queue</h1>
+      {permissionError && (
+        <div className="mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {permissionError}
+        </div>
+      )}
       <div className="flex flex-wrap gap-2 mb-4">
         <button
           className={`px-3 py-1 text-sm rounded border ${filter === "queue" ? "bg-primary text-primary-foreground" : "bg-background"}`}
@@ -276,16 +261,7 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
                     : normalizeStatusCode(p.status?.triage_status)}
                 </td>
                 <td className="p-3">
-                  {getAshaUid(p) ? (
-                    <button
-                      className="text-blue-600 underline hover:text-blue-700"
-                      onClick={() => router.push(`/lab/asha/${getAshaUid(p)}`)}
-                    >
-                      {getAshaName(p)}
-                    </button>
-                  ) : (
-                    "Unknown"
-                  )}
+                  {getAshaName(p)}
                 </td>
                 <td className="p-3">{getAshaPhone(p)}</td>
                 <td className="p-3">

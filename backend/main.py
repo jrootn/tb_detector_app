@@ -295,6 +295,10 @@ async def sync_patients(request: Request, _: Dict[str, Any] = Depends(verify_fir
         assigned_lab_tech_id = get_assignee_for_facility(facility_id, "LAB_TECH")
 
         payload = record.model_dump()
+        if asha_doc.get("name"):
+            payload["asha_name"] = asha_doc.get("name")
+        if asha_doc.get("phone"):
+            payload["asha_phone_number"] = asha_doc.get("phone")
         if facility_id:
             payload["facility_id"] = facility_id
             payload["facility_name"] = facility_name

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
-import { collection, updateDoc, doc, onSnapshot, query } from "firebase/firestore"
+import { collection, updateDoc, doc, onSnapshot, query, where } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -68,22 +68,26 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   const [csvOnlyHighRisk, setCsvOnlyHighRisk] = useState(false)
   const [csvIncludeSummary, setCsvIncludeSummary] = useState(true)
   const [csvIncludeCoordinates, setCsvIncludeCoordinates] = useState(false)
+  const [permissionError, setPermissionError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!doctorUid) return
     setMounted(true)
-    const q = query(collection(db, "patients"))
+    const q = query(collection(db, "patients"), where("assigned_doctor_id", "==", doctorUid))
     const unsub = onSnapshot(
       q,
       (snap) => {
         const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as PatientRecord) }))
         setPatients(rows)
+        setPermissionError(null)
       },
       (error) => {
         console.error("Failed to load patients", error)
+        setPermissionError("Doctor patient permissions are blocked. Check Firestore rules for assigned_doctor_id read access.")
       }
     )
     return () => unsub()
-  }, [])
+  }, [doctorUid])
 
   useEffect(() => {
     const handler = () => setIsOnline(navigator.onLine)
@@ -339,6 +343,9 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       </div>
 
       <div className="flex flex-wrap gap-2 items-center">
+        {permissionError && (
+          <span className="text-sm text-red-600">{permissionError}</span>
+        )}
         <span className="text-sm text-muted-foreground">
           Scope: {visiblePatients.length} | Showing: {sorted.length}
         </span>
@@ -452,9 +459,19 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       )}
 
       {view === "map" && mounted && isOnline && (
-        <div className="h-[70vh] w-full overflow-hidden rounded-lg border">
-          <DoctorHeatmap patients={filtered} />
-        </div>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Assigned Patient Map</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              This map includes only patients assigned to you (or your mapped facility for legacy records).
+            </p>
+            <div className="h-[65vh] w-full overflow-hidden rounded-lg border">
+              <DoctorHeatmap patients={filtered} />
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {view === "analytics" && (
