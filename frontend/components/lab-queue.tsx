@@ -6,6 +6,7 @@ import { db, auth } from "@/lib/firebase"
 import { addUpload } from "@/lib/db"
 import { syncUploads } from "@/lib/sync"
 import { resolveStorageUrl } from "@/lib/storage-utils"
+import { isCompletedStatus, normalizeTriageStatus, triageStatusLabel } from "@/lib/triage-status"
 import { toast } from "sonner"
 import { useRouter } from "next/navigation"
 
@@ -30,15 +31,6 @@ interface PatientRecord {
 interface LabQueueProps {
   labUid: string
   facilityId?: string
-}
-
-function normalizeStatusCode(status?: string): string {
-  if (!status) return "AWAITING_DOCTOR"
-  const normalized = status.toUpperCase()
-  if (normalized === "AWAITINGDOCTOR") return "AWAITING_DOCTOR"
-  if (normalized === "TESTPENDING") return "TEST_PENDING"
-  if (normalized === "UNDERTREATMENT") return "UNDER_TREATMENT"
-  return normalized
 }
 
 export function LabQueue({ labUid, facilityId }: LabQueueProps) {
@@ -125,13 +117,13 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
       if (score < minScore) return false
 
       const status = p.status?.triage_status
-      const statusCode = normalizeStatusCode(status)
+      const statusCode = normalizeTriageStatus(status)
       const hasLabResult = Boolean(
         p.lab_results?.report_path ||
           p.lab_results?.report_uri ||
           (p.lab_results?.files && p.lab_results.files.length > 0)
       )
-      const isDone = statusCode === "LAB_DONE" || hasLabResult
+      const isDone = isCompletedStatus(statusCode) || statusCode === "LAB_DONE" || hasLabResult
       if (filter === "queue" && isDone) return false
       if (filter === "done" && !isDone) return false
 
@@ -215,7 +207,7 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
         )}
 
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>Min AI Score</span>
+          <span>Min AI Score (0-10)</span>
           <input
             type="number"
             min={0}
@@ -257,8 +249,8 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
                       p.lab_results?.report_uri ||
                       (p.lab_results?.files && p.lab_results.files.length > 0)
                   )
-                    ? "LAB_DONE"
-                    : normalizeStatusCode(p.status?.triage_status)}
+                    ? triageStatusLabel("LAB_DONE")
+                    : triageStatusLabel(p.status?.triage_status)}
                 </td>
                 <td className="p-3">
                   {getAshaName(p)}

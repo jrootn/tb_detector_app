@@ -166,21 +166,21 @@ def get_hear_score(_: Optional[List[AudioMeta]]) -> float:
 
 
 def get_medgemini_summary(risk_score: float, triage_status: Optional[str]) -> str:
-    if triage_status == "ASSIGNED_TO_LAB":
-        return "Assigned to lab for confirmatory testing. Prioritize sample processing."
+    if triage_status in {"AI_TRIAGED", "TEST_QUEUED"}:
+        return "AI triage completed. Keep this case in testing queue based on risk and capacity."
     if triage_status == "LAB_DONE":
-        return "Lab work completed. Review results and finalize treatment plan."
-    if triage_status == "UNDER_TREATMENT":
-        return "Patient on treatment. Continue monitoring and adherence support."
-    if triage_status == "CLEARED":
-        return "Low concern. Provide routine follow-up and health education."
-    if triage_status == "TEST_PENDING":
-        return "Testing pending. Schedule sputum or X-ray as soon as possible."
+        return "Lab result is ready. Doctor should finalize mandatory follow-up actions."
+    if triage_status == "DOCTOR_FINALIZED":
+        return "Doctor finalized action plan. ASHA should execute mandatory follow-up tasks."
+    if triage_status == "ASHA_ACTION_IN_PROGRESS":
+        return "ASHA follow-up is in progress. Track adherence and household screening."
+    if triage_status == "CLOSED":
+        return "Case workflow closed. Continue routine surveillance where needed."
 
     if risk_score >= 8:
-        return "High TB suspicion. Urgent evaluation and testing recommended."
+        return "High TB suspicion. Prioritize this case in test queue and rapid review."
     if risk_score >= 5:
-        return "Moderate TB risk. Expedite diagnostics and follow-up."
+        return "Moderate TB risk. Keep in active testing queue and monitor."
     return "Low TB risk. Monitor symptoms and advise follow-up if worsening."
 
 

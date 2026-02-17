@@ -4,6 +4,11 @@ import { useEffect, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
 import { collection, updateDoc, doc, onSnapshot, query, where } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import {
+  isRankEditableStatus,
+  normalizeTriageStatus,
+  triageStatusLabel,
+} from "@/lib/triage-status"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -46,23 +51,15 @@ function normalizeName(name?: string) {
   return name.replace(/\s+\d+$/, "")
 }
 
-function normalizeStatusCode(status?: string): string {
-  if (!status) return "AWAITING_DOCTOR"
-  const normalized = status.toUpperCase()
-  if (normalized === "AWAITINGDOCTOR") return "AWAITING_DOCTOR"
-  if (normalized === "TESTPENDING") return "TEST_PENDING"
-  if (normalized === "UNDERTREATMENT") return "UNDER_TREATMENT"
-  return normalized
-}
-
 export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps) {
   const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
+  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null)
   const [view, setView] = useState<"list" | "map" | "analytics">("list")
   const [mounted, setMounted] = useState(false)
   const [filter, setFilter] = useState<"all" | "today" | "week" | "30days" | "date">("all")
   const [specificDate, setSpecificDate] = useState("")
-  const [statusFilter, setStatusFilter] = useState<string>("AWAITING_DOCTOR")
+  const [statusFilter, setStatusFilter] = useState<string>("TEST_QUEUED")
   const [search, setSearch] = useState("")
   const [isOnline, setIsOnline] = useState(true)
   const [csvOnlyHighRisk, setCsvOnlyHighRisk] = useState(false)
@@ -112,7 +109,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   const filtered = useMemo(() => {
     const now = new Date()
     return visiblePatients.filter((p) => {
-      if (statusFilter !== "all" && normalizeStatusCode(p.status?.triage_status) !== statusFilter) {
+      if (statusFilter !== "all" && normalizeTriageStatus(p.status?.triage_status) !== statusFilter) {
         return false
       }
 
@@ -153,8 +150,8 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       const aPriority = a.doctor_priority ? 1 : 0
       const bPriority = b.doctor_priority ? 1 : 0
       if (aPriority !== bPriority) return bPriority - aPriority
-      const aAwaiting = normalizeStatusCode(a.status?.triage_status) === "AWAITING_DOCTOR"
-      const bAwaiting = normalizeStatusCode(b.status?.triage_status) === "AWAITING_DOCTOR"
+      const aAwaiting = normalizeTriageStatus(a.status?.triage_status) === "TEST_QUEUED"
+      const bAwaiting = normalizeTriageStatus(b.status?.triage_status) === "TEST_QUEUED"
       if (aAwaiting !== bAwaiting) return aAwaiting ? -1 : 1
       const aHasRank = typeof a.doctor_rank === "number"
       const bHasRank = typeof b.doctor_rank === "number"
@@ -171,6 +168,21 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
     })
   }, [filtered])
 
+  useEffect(() => {
+    if (sorted.length === 0) {
+      setSelectedPatientId(null)
+      return
+    }
+    if (!selectedPatientId || !sorted.some((p) => p.id === selectedPatientId)) {
+      setSelectedPatientId(sorted[0].id)
+    }
+  }, [sorted, selectedPatientId])
+
+  const selectedPatient = useMemo(() => {
+    if (!selectedPatientId) return null
+    return sorted.find((p) => p.id === selectedPatientId) || null
+  }, [sorted, selectedPatientId])
+
   const markUrgent = async (patientId: string) => {
     await updateDoc(doc(db, "patients", patientId), { doctor_priority: true })
     setPatients((prev) =>
@@ -178,46 +190,38 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
     )
   }
 
-  const moveUp = async (index: number) => {
+  const swapDoctorRanks = async (first: PatientRecord, second: PatientRecord) => {
+    const fallbackFirst = sorted.findIndex((p) => p.id === first.id) + 1
+    const fallbackSecond = sorted.findIndex((p) => p.id === second.id) + 1
+    const firstRank = typeof first.doctor_rank === "number" ? first.doctor_rank : fallbackFirst
+    const secondRank = typeof second.doctor_rank === "number" ? second.doctor_rank : fallbackSecond
+
+    await Promise.all([
+      updateDoc(doc(db, "patients", first.id), { doctor_rank: secondRank }),
+      updateDoc(doc(db, "patients", second.id), { doctor_rank: firstRank }),
+    ])
+
+    setPatients((prev) =>
+      prev.map((p) => {
+        if (p.id === first.id) return { ...p, doctor_rank: secondRank }
+        if (p.id === second.id) return { ...p, doctor_rank: firstRank }
+        return p
+      })
+    )
+  }
+
+  const moveUp = async (patientId: string) => {
+    const awaitingQueue = sorted.filter((p) => normalizeTriageStatus(p.status?.triage_status) === "TEST_QUEUED")
+    const index = awaitingQueue.findIndex((p) => p.id === patientId)
     if (index <= 0) return
-    const current = sorted[index]
-    const above = sorted[index - 1]
-    const newRank = (above.doctor_rank ?? 0) - 1
-    await updateDoc(doc(db, "patients", current.id), { doctor_rank: newRank })
-    setPatients((prev) =>
-      prev.map((p) => (p.id === current.id ? { ...p, doctor_rank: newRank } : p))
-    )
+    await swapDoctorRanks(awaitingQueue[index], awaitingQueue[index - 1])
   }
 
-  const moveDown = async (index: number) => {
-    if (index >= sorted.length - 1) return
-    const current = sorted[index]
-    const below = sorted[index + 1]
-    const newRank = (below.doctor_rank ?? 0) + 1
-    await updateDoc(doc(db, "patients", current.id), { doctor_rank: newRank })
-    setPatients((prev) =>
-      prev.map((p) => (p.id === current.id ? { ...p, doctor_rank: newRank } : p))
-    )
-  }
-
-  const toStatusLabel = (status?: string) => {
-    if (!status) return "Awaiting Doctor"
-    switch (status) {
-      case "AWAITING_DOCTOR":
-        return "Awaiting Doctor"
-      case "ASSIGNED_TO_LAB":
-        return "Assigned to Lab"
-      case "LAB_DONE":
-        return "Lab Done"
-      case "TEST_PENDING":
-        return "Test Pending"
-      case "UNDER_TREATMENT":
-        return "Under Treatment"
-      case "CLEARED":
-        return "Cleared"
-      default:
-        return status.replaceAll("_", " ")
-    }
+  const moveDown = async (patientId: string) => {
+    const awaitingQueue = sorted.filter((p) => normalizeTriageStatus(p.status?.triage_status) === "TEST_QUEUED")
+    const index = awaitingQueue.findIndex((p) => p.id === patientId)
+    if (index < 0 || index >= awaitingQueue.length - 1) return
+    await swapDoctorRanks(awaitingQueue[index], awaitingQueue[index + 1])
   }
 
   const analyticsPatients = sorted
@@ -225,7 +229,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     analyticsPatients.forEach((p) => {
-      const status = toStatusLabel(normalizeStatusCode(p.status?.triage_status))
+      const status = triageStatusLabel(p.status?.triage_status)
       counts[status] = (counts[status] || 0) + 1
     })
     return Object.entries(counts).map(([name, value]) => ({ name, value }))
@@ -292,7 +296,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
         normalizeName(p.demographics?.name),
         p.sample_id || "-",
         p.ai?.risk_score ?? 0,
-        toStatusLabel(normalizeStatusCode(p.status?.triage_status)),
+        triageStatusLabel(p.status?.triage_status),
         p.doctor_priority ? "urgent" : "normal",
         p.doctor_rank ?? 0,
       ]
@@ -315,19 +319,22 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   }
 
   const statusBadge = (status?: string) => {
-    switch (status) {
-      case "ASSIGNED_TO_LAB":
+    const normalized = normalizeTriageStatus(status)
+    switch (normalized) {
+      case "AI_TRIAGED":
         return "bg-blue-100 text-blue-700"
+      case "TEST_QUEUED":
+        return "bg-orange-100 text-orange-700"
       case "LAB_DONE":
         return "bg-emerald-100 text-emerald-700"
-      case "UNDER_TREATMENT":
+      case "DOCTOR_FINALIZED":
         return "bg-amber-100 text-amber-700"
-      case "TEST_PENDING":
-        return "bg-orange-100 text-orange-700"
-      case "CLEARED":
+      case "ASHA_ACTION_IN_PROGRESS":
+        return "bg-purple-100 text-purple-700"
+      case "CLOSED":
         return "bg-slate-100 text-slate-700"
       default:
-        return "bg-red-100 text-red-700"
+        return "bg-blue-100 text-blue-700"
     }
   }
 
@@ -384,69 +391,157 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
           className="h-8 px-2 border rounded-md text-sm bg-background"
         >
           <option value="all">All Status</option>
-          <option value="AWAITING_DOCTOR">Awaiting Doctor</option>
-          <option value="TEST_PENDING">Test Pending</option>
-          <option value="ASSIGNED_TO_LAB">Assigned to Lab</option>
+          <option value="AI_TRIAGED">AI Triaged</option>
+          <option value="TEST_QUEUED">In Testing Queue</option>
           <option value="LAB_DONE">Lab Done</option>
-          <option value="UNDER_TREATMENT">Under Treatment</option>
-          <option value="CLEARED">Cleared</option>
+          <option value="DOCTOR_FINALIZED">Doctor Finalized</option>
+          <option value="ASHA_ACTION_IN_PROGRESS">ASHA Follow-up Active</option>
+          <option value="CLOSED">Closed</option>
         </select>
       </div>
 
       {view === "list" && (
-        <div className="space-y-3">
-          {sorted.map((patient, index) => (
-            <Card key={patient.id} className="cursor-pointer" onClick={() => router.push(`/doctor/patient/${patient.id}`)}>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center justify-between">
-                  <span className="flex items-center gap-2">
-                    {normalizeName(patient.demographics?.name)}
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(patient.status?.triage_status)}`}>
-                      {toStatusLabel(normalizeStatusCode(patient.status?.triage_status))}
-                    </span>
-                  </span>
-                  <span className={`text-sm ${patient.ai?.risk_score && patient.ai.risk_score >= 8 ? "text-red-600" : "text-emerald-600"}`}>
-                    Risk: {patient.ai?.risk_score ?? 0}
-                  </span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm text-muted-foreground">Sample ID: {patient.sample_id || "-"}</span>
-                  <div className="flex items-center gap-2">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Doctor Queue</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Lab routing is automatic by facility. Doctor only reviews and re-orders priority.
+              </p>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="max-h-[70vh] overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-muted/50">
+                    <tr className="border-b">
+                      <th className="p-2 text-left">Rank</th>
+                      <th className="p-2 text-left">Patient</th>
+                      <th className="p-2 text-left">Sample</th>
+                      <th className="p-2 text-left">Risk</th>
+                      <th className="p-2 text-left">Status</th>
+                      <th className="p-2 text-left">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map((patient, index) => {
+                      const statusCode = normalizeTriageStatus(patient.status?.triage_status)
+                      const canMove = isRankEditableStatus(patient.status?.triage_status)
+                      const isSelected = selectedPatientId === patient.id
+                      return (
+                        <tr
+                          key={patient.id}
+                          className={`border-b ${isSelected ? "bg-emerald-50" : "hover:bg-muted/40"} cursor-pointer`}
+                          onClick={() => setSelectedPatientId(patient.id)}
+                        >
+                          <td className="p-2 font-semibold">{index + 1}</td>
+                          <td className="p-2">{normalizeName(patient.demographics?.name)}</td>
+                          <td className="p-2 text-muted-foreground">{patient.sample_id || "-"}</td>
+                          <td className={`p-2 font-medium ${(patient.ai?.risk_score ?? 0) >= 8 ? "text-red-600" : "text-emerald-600"}`}>
+                            {patient.ai?.risk_score ?? 0}
+                          </td>
+                          <td className="p-2">
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(patient.status?.triage_status)}`}>
+                              {triageStatusLabel(statusCode)}
+                            </span>
+                          </td>
+                          <td className="p-2">
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={!canMove}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  moveUp(patient.id)
+                                }}
+                              >
+                                ↑
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={!canMove}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  moveDown(patient.id)
+                                }}
+                              >
+                                ↓
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant={patient.doctor_priority ? "default" : "outline"}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  markUrgent(patient.id)
+                                }}
+                                disabled={patient.doctor_priority}
+                              >
+                                {patient.doctor_priority ? "Urgent" : "Urgent"}
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    {sorted.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="p-6 text-center text-muted-foreground">
+                          No patients found for current filters.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Selected Patient</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {!selectedPatient && (
+                <div className="text-sm text-muted-foreground">Select a patient from the queue.</div>
+              )}
+              {selectedPatient && (
+                <>
+                  <div className="text-base font-semibold">{normalizeName(selectedPatient.demographics?.name)}</div>
+                  <div className="text-sm text-muted-foreground">Sample ID: {selectedPatient.sample_id || "-"}</div>
+                  <div className="text-sm">Risk Score: {selectedPatient.ai?.risk_score ?? 0}</div>
+                  <div className="text-sm">
+                    Status: {triageStatusLabel(selectedPatient.status?.triage_status)}
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
+                    {selectedPatient.ai?.medgemini_summary || "No AI summary available."}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={normalizeStatusCode(patient.status?.triage_status) !== "AWAITING_DOCTOR"}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        moveUp(index)
-                      }}
+                      disabled={!isRankEditableStatus(selectedPatient.status?.triage_status)}
+                      onClick={() => moveUp(selectedPatient.id)}
                     >
-                      ↑
+                      Move Up
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={normalizeStatusCode(patient.status?.triage_status) !== "AWAITING_DOCTOR"}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        moveDown(index)
-                      }}
+                      disabled={!isRankEditableStatus(selectedPatient.status?.triage_status)}
+                      onClick={() => moveDown(selectedPatient.id)}
                     >
-                      ↓
+                      Move Down
                     </Button>
-                    <Button size="sm" onClick={(e) => { e.stopPropagation(); markUrgent(patient.id) }} disabled={patient.doctor_priority}>
-                      {patient.doctor_priority ? "Urgent" : "Mark Urgent"}
+                    <Button size="sm" onClick={() => markUrgent(selectedPatient.id)} disabled={selectedPatient.doctor_priority}>
+                      {selectedPatient.doctor_priority ? "Urgent" : "Mark Urgent"}
                     </Button>
                   </div>
-                </div>
-                <div className="text-xs text-muted-foreground line-clamp-2">
-                  {patient.ai?.medgemini_summary || "No AI summary available."}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                  <Button onClick={() => router.push(`/doctor/patient/${selectedPatient.id}`)}>Open Full Profile</Button>
+                </>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -565,14 +660,14 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
               <CardContent className="text-3xl font-semibold text-red-700">{highRiskPatients.length}</CardContent>
             </Card>
             <Card className="border-amber-100 bg-gradient-to-br from-amber-50 to-white">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-amber-900 flex items-center gap-2">
-                  <Clock3 className="h-4 w-4" />
-                  Pending Review
-                </CardTitle>
-              </CardHeader>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm text-amber-900 flex items-center gap-2">
+                    <Clock3 className="h-4 w-4" />
+                  Testing Queue
+                  </CardTitle>
+                </CardHeader>
               <CardContent className="text-3xl font-semibold text-amber-700">
-                {analyticsPatients.filter((p) => normalizeStatusCode(p.status?.triage_status) === "AWAITING_DOCTOR").length}
+                {analyticsPatients.filter((p) => normalizeTriageStatus(p.status?.triage_status) === "TEST_QUEUED").length}
               </CardContent>
             </Card>
             <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50 to-white">
@@ -644,7 +739,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                         <div className="text-sm font-medium">{normalizeName(p.demographics?.name)}</div>
                         <div className="text-xs text-muted-foreground">
                           Sample: {p.sample_id || "-"} • Score: {p.ai?.risk_score ?? 0} • Status:{" "}
-                          {toStatusLabel(normalizeStatusCode(p.status?.triage_status))}
+                          {triageStatusLabel(p.status?.triage_status)}
                         </div>
                       </div>
                       <Button

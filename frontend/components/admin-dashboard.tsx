@@ -14,6 +14,7 @@ import {
   YAxis,
 } from "recharts"
 import { db } from "@/lib/firebase"
+import { normalizeTriageStatus, triageStatusLabel } from "@/lib/triage-status"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -65,39 +66,10 @@ interface PatientRecord {
   created_at_offline?: string
 }
 
-function normalizeStatusCode(status?: string): string {
-  if (!status) return "AWAITING_DOCTOR"
-  const normalized = status.toUpperCase()
-  if (normalized === "AWAITINGDOCTOR") return "AWAITING_DOCTOR"
-  if (normalized === "TESTPENDING") return "TEST_PENDING"
-  if (normalized === "UNDERTREATMENT") return "UNDER_TREATMENT"
-  return normalized
-}
-
-function toStatusLabel(status?: string): string {
-  const code = normalizeStatusCode(status)
-  switch (code) {
-    case "AWAITING_DOCTOR":
-      return "Awaiting Doctor"
-    case "ASSIGNED_TO_LAB":
-      return "Assigned to Lab"
-    case "LAB_DONE":
-      return "Lab Done"
-    case "TEST_PENDING":
-      return "Test Pending"
-    case "UNDER_TREATMENT":
-      return "Under Treatment"
-    case "CLEARED":
-      return "Cleared"
-    default:
-      return code
-  }
-}
-
 function patientPriorityScore(patient: PatientRecord): number {
   const risk = Number(patient.ai?.risk_score || 0)
-  const status = normalizeStatusCode(patient.status?.triage_status)
-  const statusBoost = status === "AWAITING_DOCTOR" ? 1.5 : status === "TEST_PENDING" ? 0.7 : 0
+  const status = normalizeTriageStatus(patient.status?.triage_status)
+  const statusBoost = status === "TEST_QUEUED" ? 1.5 : status === "AI_TRIAGED" ? 1.1 : 0
   return Number((risk + statusBoost).toFixed(2))
 }
 
@@ -184,7 +156,7 @@ export function AdminDashboard() {
     const now = new Date()
     return patients.filter((p) => {
       if (facilityFilter !== "all" && (p.facility_id || "") !== facilityFilter) return false
-      if (statusFilter !== "all" && normalizeStatusCode(p.status?.triage_status) !== statusFilter) return false
+      if (statusFilter !== "all" && normalizeTriageStatus(p.status?.triage_status) !== statusFilter) return false
 
       if (dateFilter !== "all") {
         if (!p.created_at_offline) return false
@@ -225,8 +197,8 @@ export function AdminDashboard() {
     return filteredPatients
       .filter((p) => {
         const risk = Number(p.ai?.risk_score || 0)
-        const status = normalizeStatusCode(p.status?.triage_status)
-        return risk >= 7 && (status === "AWAITING_DOCTOR" || status === "TEST_PENDING" || status === "ASSIGNED_TO_LAB")
+        const status = normalizeTriageStatus(p.status?.triage_status)
+        return risk >= 7 && (status === "AI_TRIAGED" || status === "TEST_QUEUED")
       })
       .sort((a, b) => patientPriorityScore(b) - patientPriorityScore(a))
       .slice(0, 15)
@@ -267,10 +239,10 @@ export function AdminDashboard() {
           }
         }
         acc[fid].total += 1
-        const status = normalizeStatusCode(p.status?.triage_status)
-        if (status === "AWAITING_DOCTOR") acc[fid].awaitingDoctor += 1
-        if (status === "ASSIGNED_TO_LAB") acc[fid].assignedToLab += 1
-        if (status === "LAB_DONE" || status === "UNDER_TREATMENT" || status === "CLEARED") acc[fid].labDone += 1
+        const status = normalizeTriageStatus(p.status?.triage_status)
+        if (status === "AI_TRIAGED" || status === "TEST_QUEUED") acc[fid].awaitingDoctor += 1
+        if (status === "LAB_DONE") acc[fid].assignedToLab += 1
+        if (status === "DOCTOR_FINALIZED" || status === "ASHA_ACTION_IN_PROGRESS" || status === "CLOSED") acc[fid].labDone += 1
         return acc
       }, {})
     ).sort((a, b) => b.total - a.total)
@@ -279,7 +251,7 @@ export function AdminDashboard() {
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {}
     filteredPatients.forEach((p) => {
-      const status = toStatusLabel(p.status?.triage_status)
+      const status = triageStatusLabel(p.status?.triage_status)
       counts[status] = (counts[status] || 0) + 1
     })
     return Object.entries(counts).map(([name, value]) => ({ name, value }))
@@ -352,7 +324,7 @@ export function AdminDashboard() {
           p.facility_name || p.facility_id || "",
           Number(p.ai?.risk_score || 0).toFixed(2),
           p.ai?.risk_level || "",
-          normalizeStatusCode(p.status?.triage_status),
+          normalizeTriageStatus(p.status?.triage_status),
           p.assigned_doctor_id || "",
           p.assigned_lab_tech_id || "",
           p.created_at_offline || "",
@@ -443,12 +415,12 @@ export function AdminDashboard() {
             onChange={(e) => setStatusFilter(e.target.value)}
           >
             <option value="all">All Status</option>
-            <option value="AWAITING_DOCTOR">Awaiting Doctor</option>
-            <option value="ASSIGNED_TO_LAB">Assigned To Lab</option>
-            <option value="TEST_PENDING">Test Pending</option>
+            <option value="AI_TRIAGED">AI Triaged</option>
+            <option value="TEST_QUEUED">In Testing Queue</option>
             <option value="LAB_DONE">Lab Done</option>
-            <option value="UNDER_TREATMENT">Under Treatment</option>
-            <option value="CLEARED">Cleared</option>
+            <option value="DOCTOR_FINALIZED">Doctor Finalized</option>
+            <option value="ASHA_ACTION_IN_PROGRESS">ASHA Follow-up Active</option>
+            <option value="CLOSED">Closed</option>
           </select>
           <select
             className="h-10 rounded-md border px-3 text-sm bg-background"
@@ -494,15 +466,15 @@ export function AdminDashboard() {
                   <Badge variant="secondary">{unresolvedAssignments.length}</Badge>
                 </div>
                 <div className="flex items-center justify-between rounded-md border p-2">
-                  <span>Awaiting doctor review</span>
+                  <span>In testing queue</span>
                   <Badge variant="secondary">
-                    {filteredPatients.filter((p) => normalizeStatusCode(p.status?.triage_status) === "AWAITING_DOCTOR").length}
+                    {filteredPatients.filter((p) => normalizeTriageStatus(p.status?.triage_status) === "TEST_QUEUED").length}
                   </Badge>
                 </div>
                 <div className="flex items-center justify-between rounded-md border p-2">
-                  <span>Assigned to lab</span>
+                  <span>Lab result ready</span>
                   <Badge variant="secondary">
-                    {filteredPatients.filter((p) => normalizeStatusCode(p.status?.triage_status) === "ASSIGNED_TO_LAB").length}
+                    {filteredPatients.filter((p) => normalizeTriageStatus(p.status?.triage_status) === "LAB_DONE").length}
                   </Badge>
                 </div>
               </CardContent>
@@ -532,7 +504,7 @@ export function AdminDashboard() {
                       <td className="p-2">{p.sample_id || "-"}</td>
                       <td className="p-2">{facilityMap[p.facility_id || ""]?.name || p.facility_id || "-"}</td>
                       <td className="p-2">{Number(p.ai?.risk_score || 0).toFixed(1)}</td>
-                      <td className="p-2">{toStatusLabel(p.status?.triage_status)}</td>
+                      <td className="p-2">{triageStatusLabel(p.status?.triage_status)}</td>
                       <td className="p-2 font-semibold">{patientPriorityScore(p).toFixed(2)}</td>
                     </tr>
                   ))}
@@ -556,9 +528,9 @@ export function AdminDashboard() {
                   <tr className="border-b bg-muted/40">
                     <th className="p-2 text-left">Facility</th>
                     <th className="p-2 text-left">Total</th>
-                    <th className="p-2 text-left">Awaiting Doctor</th>
-                    <th className="p-2 text-left">Assigned To Lab</th>
-                    <th className="p-2 text-left">Lab Completed</th>
+                    <th className="p-2 text-left">Testing Queue</th>
+                    <th className="p-2 text-left">Lab Result Ready</th>
+                    <th className="p-2 text-left">Follow-up/Closed</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -633,9 +605,9 @@ export function AdminDashboard() {
               <CardContent className="text-3xl font-semibold text-red-600">{riskBuckets.find((r) => r.name === "High")?.value || 0}</CardContent>
             </Card>
             <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Awaiting Doctor</CardTitle></CardHeader>
+              <CardHeader className="pb-2"><CardTitle className="text-sm">Testing Queue</CardTitle></CardHeader>
               <CardContent className="text-3xl font-semibold text-amber-600">
-                {filteredPatients.filter((p) => normalizeStatusCode(p.status?.triage_status) === "AWAITING_DOCTOR").length}
+                {filteredPatients.filter((p) => normalizeTriageStatus(p.status?.triage_status) === "TEST_QUEUED").length}
               </CardContent>
             </Card>
           </div>

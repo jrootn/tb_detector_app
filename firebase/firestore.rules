@@ -40,6 +40,13 @@ service cloud.firestore {
 
     function triageAllowed(code) {
       return code in [
+        "COLLECTED",
+        "SYNCED",
+        "AI_TRIAGED",
+        "TEST_QUEUED",
+        "DOCTOR_FINALIZED",
+        "ASHA_ACTION_IN_PROGRESS",
+        "CLOSED",
         "AWAITING_DOCTOR",
         "TEST_PENDING",
         "ASSIGNED_TO_LAB",

@@ -38,15 +38,15 @@ function getErrorCode(error: unknown): string | undefined {
 function mapStatusToApi(status?: Patient["status"]): string {
   switch (status) {
     case "awaitingDoctor":
-      return "AWAITING_DOCTOR"
+      return "TEST_QUEUED"
     case "testPending":
-      return "TEST_PENDING"
+      return "TEST_QUEUED"
     case "underTreatment":
-      return "UNDER_TREATMENT"
+      return "ASHA_ACTION_IN_PROGRESS"
     case "cleared":
-      return "CLEARED"
+      return "CLOSED"
     default:
-      return "AWAITING_DOCTOR"
+      return "TEST_QUEUED"
   }
 }
 
@@ -401,6 +401,7 @@ export async function syncUploads(userId: string, options: UploadSyncOptions = {
           "lab_results.uploaded_at": uploadedAt,
           "lab_results.uploaded_by": userId,
           "lab_results.files": arrayUnion(reportEntry),
+          "status.triage_status": "LAB_DONE",
         })
       } else if (upload.role === "DOCTOR" && upload.kind === "report") {
         const fileEntry: Record<string, unknown> = {

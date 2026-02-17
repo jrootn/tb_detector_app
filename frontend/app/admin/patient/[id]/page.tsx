@@ -6,6 +6,7 @@ import { onAuthStateChanged } from "firebase/auth"
 import { doc, getDoc } from "firebase/firestore"
 import { auth, db } from "@/lib/firebase"
 import { resolveStorageUrl } from "@/lib/storage-utils"
+import { triageStatusLabel } from "@/lib/triage-status"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
@@ -86,7 +87,7 @@ export default function AdminPatientPage() {
           <div>Facility: {patient.facility_name || patient.facility_id || "-"}</div>
           <div>Assigned Doctor UID: {patient.assigned_doctor_id || "-"}</div>
           <div>Assigned Lab UID: {patient.assigned_lab_tech_id || "-"}</div>
-          <div>Status: {patient.status?.triage_status || "-"}</div>
+          <div>Status: {triageStatusLabel(patient.status?.triage_status)}</div>
           <div>AI Risk: {patient.ai?.risk_score ?? 0} ({patient.ai?.risk_level || "-"})</div>
           <div>AI Summary: {patient.ai?.medgemini_summary || "-"}</div>
           <div>GPS: {patient.gps?.lat ?? "-"}, {patient.gps?.lng ?? "-"}</div>

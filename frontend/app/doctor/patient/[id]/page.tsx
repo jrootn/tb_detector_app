@@ -7,18 +7,13 @@ import { auth, db } from "@/lib/firebase"
 import { addUpload } from "@/lib/db"
 import { resolveStorageUrl } from "@/lib/storage-utils"
 import { syncUploads } from "@/lib/sync"
+import { normalizeTriageStatus, triageStatusLabel } from "@/lib/triage-status"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { PatientNotesThread } from "@/components/patient-notes-thread"
-
-const AWAITING_DOCTOR = "AWAITING_DOCTOR"
-const ASSIGNED_TO_LAB = "ASSIGNED_TO_LAB"
-const TEST_PENDING = "TEST_PENDING"
-const UNDER_TREATMENT = "UNDER_TREATMENT"
-const CLEARED = "CLEARED"
 
 interface PatientRecord {
   id: string
@@ -44,15 +39,6 @@ interface PatientRecord {
 function normalizeName(name?: string) {
   if (!name) return "Unknown"
   return name.replace(/\s+\d+$/, "")
-}
-
-function normalizeStatusCode(status?: string): string {
-  if (!status) return AWAITING_DOCTOR
-  const normalized = status.toUpperCase()
-  if (normalized === "AWAITINGDOCTOR") return AWAITING_DOCTOR
-  if (normalized === "TESTPENDING") return TEST_PENDING
-  if (normalized === "UNDERTREATMENT") return UNDER_TREATMENT
-  return normalized
 }
 
 function fileKind(name?: string): "image" | "audio" | "pdf" | "other" {
@@ -133,7 +119,7 @@ export default function DoctorPatientPage() {
 
   const updateStatus = async (status: string) => {
     if (!patient) return
-    const previous = normalizeStatusCode(patient.status?.triage_status)
+    const previous = normalizeTriageStatus(patient.status?.triage_status)
     setSavingStatus(true)
     setPatient((prev) => (prev ? { ...prev, status: { triage_status: status } } : prev))
     try {
@@ -214,34 +200,37 @@ export default function DoctorPatientPage() {
 
   if (!patient) return <div className="p-6">Loading...</div>
 
-  const currentStatus = normalizeStatusCode(patient.status?.triage_status)
+  const currentStatus = normalizeTriageStatus(patient.status?.triage_status)
   const statusLabelMap: Record<string, string> = {
-    [AWAITING_DOCTOR]: "Awaiting Doctor Review",
-    [ASSIGNED_TO_LAB]: "Assigned To Lab",
-    [TEST_PENDING]: "Test Pending",
-    [UNDER_TREATMENT]: "Under Treatment",
-    [CLEARED]: "Cleared",
+    COLLECTED: "Collected",
+    SYNCED: "Synced",
+    AI_TRIAGED: "AI Triaged",
+    TEST_QUEUED: "In Testing Queue",
+    LAB_DONE: "Lab Result Ready",
+    DOCTOR_FINALIZED: "Doctor Finalized",
+    ASHA_ACTION_IN_PROGRESS: "ASHA Follow-up Active",
+    CLOSED: "Closed",
   }
   const actionButtons = [
     {
-      key: ASSIGNED_TO_LAB,
-      label: "Assign to Lab",
-      help: "Use after doctor review when lab sample/report is required.",
+      key: "DOCTOR_FINALIZED",
+      label: "Finalize Plan",
+      help: "Doctor review completed and mandatory action plan recorded.",
     },
     {
-      key: TEST_PENDING,
-      label: "Mark Test Pending",
-      help: "Use when test is advised but sample/result is not completed yet.",
+      key: "ASHA_ACTION_IN_PROGRESS",
+      label: "Start ASHA Follow-up",
+      help: "ASHA follow-up has started for medication, contact tracing, or revisit.",
     },
     {
-      key: UNDER_TREATMENT,
-      label: "Under Treatment",
-      help: "Use once TB treatment is started.",
+      key: "CLOSED",
+      label: "Close Case",
+      help: "Workflow completed and case can be closed.",
     },
     {
-      key: CLEARED,
-      label: "Mark Cleared",
-      help: "Use when no active TB action is needed after review/tests.",
+      key: "TEST_QUEUED",
+      label: "Return to Test Queue",
+      help: "Send case back for retest or additional diagnostics.",
     },
   ]
 
@@ -357,6 +346,7 @@ export default function DoctorPatientPage() {
             <div className="font-medium">How to use actions</div>
             <div className="mt-1 text-muted-foreground">
               Sample ID token is auto-generated at ASHA collection and should not be edited by doctor.
+              Lab routing is automatic based on facility mapping; doctor finalizes post-test actions.
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -373,7 +363,7 @@ export default function DoctorPatientPage() {
             ))}
           </div>
           <div className="text-sm text-muted-foreground">
-            Current Status: {statusLabelMap[currentStatus] || currentStatus}
+            Current Status: {statusLabelMap[currentStatus] || triageStatusLabel(currentStatus)}
             {savingStatus ? " • Updating..." : ""}
           </div>
           <div className="space-y-2">

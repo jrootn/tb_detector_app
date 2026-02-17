@@ -6,6 +6,7 @@ import { onAuthStateChanged } from "firebase/auth"
 import { doc, getDoc } from "firebase/firestore"
 import { auth, db } from "@/lib/firebase"
 import { resolveStorageUrl } from "@/lib/storage-utils"
+import { triageStatusLabel } from "@/lib/triage-status"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { PatientNotesThread } from "@/components/patient-notes-thread"
@@ -83,7 +84,7 @@ export default function LabPatientPage() {
           <div>Sample ID: {patient.sample_id || "-"}</div>
           <div>Phone: {patient.demographics?.phone || "-"}</div>
           <div>Risk Score: {patient.ai?.risk_score ?? 0}</div>
-          <div>Status: {patient.status?.triage_status || "-"}</div>
+          <div>Status: {triageStatusLabel(patient.status?.triage_status)}</div>
           {reportUrl && (
             <a className="text-blue-600 underline" href={reportUrl} target="_blank" rel="noreferrer">
               Preview Latest Report
@@ -103,4 +104,3 @@ export default function LabPatientPage() {
     </div>
   )
 }
-

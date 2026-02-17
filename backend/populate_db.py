@@ -141,12 +141,12 @@ PHYSICAL_SIGNS = ["CHEST_PAIN", "SHORTNESS_OF_BREATH", "LOSS_OF_APPETITE", "EXTR
 ANSWER_CHOICES = ["yes", "no", "dontKnow", "preferNotToSay"]
 
 TRIAGE_STATUSES = [
-    "AWAITING_DOCTOR",
-    "TEST_PENDING",
-    "ASSIGNED_TO_LAB",
+    "AI_TRIAGED",
+    "TEST_QUEUED",
     "LAB_DONE",
-    "UNDER_TREATMENT",
-    "CLEARED",
+    "DOCTOR_FINALIZED",
+    "ASHA_ACTION_IN_PROGRESS",
+    "CLOSED",
 ]
 
 # Demo users based on NTEP-style hierarchy
@@ -296,16 +296,16 @@ def calculate_risk_score(symptoms: List[Dict], risk_factors: List[str]) -> float
 
 
 def generate_summary(risk_score: float, triage_status: str) -> str:
-    if triage_status == "ASSIGNED_TO_LAB":
-        return "Assigned to lab for confirmatory testing. Prioritize sample processing."
+    if triage_status in {"AI_TRIAGED", "TEST_QUEUED"}:
+        return "AI triage completed. Keep this case in the testing queue based on risk score."
     if triage_status == "LAB_DONE":
-        return "Lab work completed. Review results and finalize treatment plan."
-    if triage_status == "UNDER_TREATMENT":
-        return "Patient on treatment. Continue monitoring and adherence support."
-    if triage_status == "CLEARED":
-        return "Low concern. Provide routine follow-up and health education."
-    if triage_status == "TEST_PENDING":
-        return "Testing pending. Schedule sputum or X-ray as soon as possible."
+        return "Lab result uploaded. Doctor should finalize mandatory field actions."
+    if triage_status == "DOCTOR_FINALIZED":
+        return "Doctor finalized action plan. ASHA execution is pending."
+    if triage_status == "ASHA_ACTION_IN_PROGRESS":
+        return "ASHA follow-up actions are active."
+    if triage_status == "CLOSED":
+        return "Case workflow completed and closed."
 
     if risk_score >= 8:
         return "High TB suspicion. Urgent evaluation and testing recommended."
@@ -320,12 +320,16 @@ def make_workflow_events(created_at: str, status: str) -> List[Dict]:
         {"code": "SYNCED", "label": "Record synced to cloud", "at": _utc_now()},
         {"code": "AI_ANALYSIS_DONE", "label": "AI triage summary generated", "at": _utc_now()},
     ]
-    if status != "AWAITING_DOCTOR":
-        events.append({"code": "DOCTOR_REVIEWED", "label": "Doctor reviewed case", "at": _utc_now()})
-    if status in {"TEST_PENDING", "ASSIGNED_TO_LAB", "LAB_DONE", "UNDER_TREATMENT", "CLEARED"}:
-        events.append({"code": "TEST_SCHEDULED", "label": "Diagnostic test pathway initiated", "at": _utc_now()})
-    if status in {"LAB_DONE", "UNDER_TREATMENT", "CLEARED"}:
-        events.append({"code": "TEST_DONE", "label": "Lab result captured", "at": _utc_now()})
+    if status in {"AI_TRIAGED", "TEST_QUEUED", "LAB_DONE", "DOCTOR_FINALIZED", "ASHA_ACTION_IN_PROGRESS", "CLOSED"}:
+        events.append({"code": "TEST_QUEUED", "label": "Diagnostic testing queue created", "at": _utc_now()})
+    if status in {"LAB_DONE", "DOCTOR_FINALIZED", "ASHA_ACTION_IN_PROGRESS", "CLOSED"}:
+        events.append({"code": "LAB_DONE", "label": "Lab result captured", "at": _utc_now()})
+    if status in {"DOCTOR_FINALIZED", "ASHA_ACTION_IN_PROGRESS", "CLOSED"}:
+        events.append({"code": "DOCTOR_FINALIZED", "label": "Doctor finalized mandatory actions", "at": _utc_now()})
+    if status in {"ASHA_ACTION_IN_PROGRESS", "CLOSED"}:
+        events.append({"code": "ASHA_ACTION_IN_PROGRESS", "label": "ASHA follow-up initiated", "at": _utc_now()})
+    if status == "CLOSED":
+        events.append({"code": "CLOSED", "label": "Case closed", "at": _utc_now()})
     return events
 
 
@@ -387,7 +391,7 @@ def build_patient(
 
     triage_status = random.choices(
         TRIAGE_STATUSES,
-        weights=[35, 20, 18, 8, 7, 12],
+        weights=[14, 32, 20, 12, 14, 8],
         k=1,
     )[0]
     risk_score = calculate_risk_score(symptoms, risk_factors_positive)
@@ -401,7 +405,7 @@ def build_patient(
         audio_uri = upload_blob(bucket, audio_path, generate_wav_bytes(4), "audio/wav")
 
     report_uri = None
-    if bucket and triage_status in {"LAB_DONE", "UNDER_TREATMENT", "CLEARED"}:
+    if bucket and triage_status in {"LAB_DONE", "DOCTOR_FINALIZED", "ASHA_ACTION_IN_PROGRESS", "CLOSED"}:
         report_path = f"lab_results/{lab_uid}/{patient_local_id}/report-{uuid.uuid4().hex}.pdf"
         report_uri = upload_blob(bucket, report_path, generate_pdf_bytes(), "application/pdf")
 
