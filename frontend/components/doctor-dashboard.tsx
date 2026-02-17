@@ -2,13 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
-import { collection, updateDoc, doc, onSnapshot, query, where } from "firebase/firestore"
+import { addDoc, collection, updateDoc, doc, onSnapshot, query, where } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import {
+  isQueueStatus,
   isRankEditableStatus,
   normalizeTriageStatus,
   triageStatusLabel,
 } from "@/lib/triage-status"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -190,16 +192,45 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
     )
   }
 
-  const swapDoctorRanks = async (first: PatientRecord, second: PatientRecord) => {
+  const swapDoctorRanks = async (
+    first: PatientRecord,
+    second: PatientRecord,
+    reason: string,
+    action: "MOVE_UP" | "MOVE_DOWN",
+    fromRank: number,
+    toRank: number
+  ) => {
     const fallbackFirst = sorted.findIndex((p) => p.id === first.id) + 1
     const fallbackSecond = sorted.findIndex((p) => p.id === second.id) + 1
     const firstRank = typeof first.doctor_rank === "number" ? first.doctor_rank : fallbackFirst
     const secondRank = typeof second.doctor_rank === "number" ? second.doctor_rank : fallbackSecond
 
+    const nowIso = new Date().toISOString()
     await Promise.all([
-      updateDoc(doc(db, "patients", first.id), { doctor_rank: secondRank }),
+      updateDoc(doc(db, "patients", first.id), {
+        doctor_rank: secondRank,
+        rank_last_action: action,
+        rank_last_reason: reason,
+        rank_last_position_from: fromRank,
+        rank_last_position_to: toRank,
+        rank_last_updated_at: nowIso,
+      }),
       updateDoc(doc(db, "patients", second.id), { doctor_rank: firstRank }),
     ])
+
+    try {
+      await addDoc(collection(db, "patients", first.id, "notes"), {
+        author_uid: doctorUid,
+        author_role: "DOCTOR",
+        author_name: (typeof window !== "undefined" ? localStorage.getItem("user_name") : null) || "Doctor",
+        message: `Priority updated (${fromRank} -> ${toRank}). Reason: ${reason}`,
+        visibility: "ALL",
+        created_at: nowIso,
+        created_at_ms: Date.now(),
+      })
+    } catch (error) {
+      console.warn("Could not add rank note", error)
+    }
 
     setPatients((prev) =>
       prev.map((p) => {
@@ -211,17 +242,33 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   }
 
   const moveUp = async (patientId: string) => {
-    const awaitingQueue = sorted.filter((p) => normalizeTriageStatus(p.status?.triage_status) === "TEST_QUEUED")
+    const awaitingQueue = sorted.filter((p) => isRankEditableStatus(p.status?.triage_status))
     const index = awaitingQueue.findIndex((p) => p.id === patientId)
     if (index <= 0) return
-    await swapDoctorRanks(awaitingQueue[index], awaitingQueue[index - 1])
+    const current = awaitingQueue[index]
+    const reason = window.prompt(`Reason for moving ${normalizeName(current.demographics?.name)} up in priority?`)
+    if (reason === null) return
+    const trimmed = reason.trim()
+    if (!trimmed) {
+      toast.error("Please enter a reason for rank change.")
+      return
+    }
+    await swapDoctorRanks(current, awaitingQueue[index - 1], trimmed, "MOVE_UP", index + 1, index)
   }
 
   const moveDown = async (patientId: string) => {
-    const awaitingQueue = sorted.filter((p) => normalizeTriageStatus(p.status?.triage_status) === "TEST_QUEUED")
+    const awaitingQueue = sorted.filter((p) => isRankEditableStatus(p.status?.triage_status))
     const index = awaitingQueue.findIndex((p) => p.id === patientId)
     if (index < 0 || index >= awaitingQueue.length - 1) return
-    await swapDoctorRanks(awaitingQueue[index], awaitingQueue[index + 1])
+    const current = awaitingQueue[index]
+    const reason = window.prompt(`Reason for moving ${normalizeName(current.demographics?.name)} down in priority?`)
+    if (reason === null) return
+    const trimmed = reason.trim()
+    if (!trimmed) {
+      toast.error("Please enter a reason for rank change.")
+      return
+    }
+    await swapDoctorRanks(current, awaitingQueue[index + 1], trimmed, "MOVE_DOWN", index + 1, index + 2)
   }
 
   const analyticsPatients = sorted
@@ -425,7 +472,8 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                   <tbody>
                     {sorted.map((patient, index) => {
                       const statusCode = normalizeTriageStatus(patient.status?.triage_status)
-                      const canMove = isRankEditableStatus(patient.status?.triage_status)
+                      const isActionable = isQueueStatus(patient.status?.triage_status)
+                      const canMove = isActionable && isRankEditableStatus(patient.status?.triage_status)
                       const isSelected = selectedPatientId === patient.id
                       return (
                         <tr
@@ -445,41 +493,45 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                             </span>
                           </td>
                           <td className="p-2">
-                            <div className="flex items-center gap-1">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={!canMove}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  moveUp(patient.id)
-                                }}
-                              >
-                                ↑
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={!canMove}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  moveDown(patient.id)
-                                }}
-                              >
-                                ↓
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant={patient.doctor_priority ? "default" : "outline"}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  markUrgent(patient.id)
-                                }}
-                                disabled={patient.doctor_priority}
-                              >
-                                {patient.doctor_priority ? "Urgent" : "Urgent"}
-                              </Button>
-                            </div>
+                            {!isActionable ? (
+                              <span className="text-xs text-muted-foreground">-</span>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={!canMove}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    moveUp(patient.id)
+                                  }}
+                                >
+                                  ↑
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={!canMove}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    moveDown(patient.id)
+                                  }}
+                                >
+                                  ↓
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant={patient.doctor_priority ? "default" : "outline"}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    markUrgent(patient.id)
+                                  }}
+                                  disabled={patient.doctor_priority}
+                                >
+                                  {patient.doctor_priority ? "Urgent" : "Urgent"}
+                                </Button>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       )
@@ -516,27 +568,33 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                   <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
                     {selectedPatient.ai?.medgemini_summary || "No AI summary available."}
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!isRankEditableStatus(selectedPatient.status?.triage_status)}
-                      onClick={() => moveUp(selectedPatient.id)}
-                    >
-                      Move Up
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!isRankEditableStatus(selectedPatient.status?.triage_status)}
-                      onClick={() => moveDown(selectedPatient.id)}
-                    >
-                      Move Down
-                    </Button>
-                    <Button size="sm" onClick={() => markUrgent(selectedPatient.id)} disabled={selectedPatient.doctor_priority}>
-                      {selectedPatient.doctor_priority ? "Urgent" : "Mark Urgent"}
-                    </Button>
-                  </div>
+                  {isQueueStatus(selectedPatient.status?.triage_status) ? (
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!isRankEditableStatus(selectedPatient.status?.triage_status)}
+                        onClick={() => moveUp(selectedPatient.id)}
+                      >
+                        Move Up
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!isRankEditableStatus(selectedPatient.status?.triage_status)}
+                        onClick={() => moveDown(selectedPatient.id)}
+                      >
+                        Move Down
+                      </Button>
+                      <Button size="sm" onClick={() => markUrgent(selectedPatient.id)} disabled={selectedPatient.doctor_priority}>
+                        {selectedPatient.doctor_priority ? "Urgent" : "Mark Urgent"}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">
+                      Reordering is available only for AI-triaged/testing-queue patients.
+                    </div>
+                  )}
                   <Button onClick={() => router.push(`/doctor/patient/${selectedPatient.id}`)}>Open Full Profile</Button>
                 </>
               )}

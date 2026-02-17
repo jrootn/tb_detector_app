@@ -63,7 +63,8 @@ export function triageStatusLabel(status?: string): string {
 }
 
 export function isRankEditableStatus(status?: string): boolean {
-  return normalizeTriageStatus(status) === "TEST_QUEUED"
+  const normalized = normalizeTriageStatus(status)
+  return normalized === "AI_TRIAGED" || normalized === "TEST_QUEUED"
 }
 
 export function isQueueStatus(status?: string): boolean {
@@ -75,4 +76,3 @@ export function isCompletedStatus(status?: string): boolean {
   const normalized = normalizeTriageStatus(status)
   return normalized === "LAB_DONE" || normalized === "DOCTOR_FINALIZED" || normalized === "ASHA_ACTION_IN_PROGRESS" || normalized === "CLOSED"
 }
-
