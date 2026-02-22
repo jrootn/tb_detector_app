@@ -46,8 +46,23 @@ def filter_workflow_events(events: Any) -> Optional[List[Dict[str, Any]]]:
     return filtered
 
 
-def build_cleanup_updates(doc_data: Dict[str, Any], remove_fields: bool) -> Dict[str, Any]:
+def build_cleanup_updates(
+    doc_data: Dict[str, Any],
+    remove_fields: bool,
+    remove_summary: bool,
+) -> Dict[str, Any]:
     updates: Dict[str, Any] = {}
+
+    ai = doc_data.get("ai")
+    if remove_summary and isinstance(ai, dict):
+        if "medgemini_summary" in ai:
+            updates["ai.medgemini_summary"] = DELETE
+        if "medgemini_summary_en" in ai:
+            updates["ai.medgemini_summary_en"] = DELETE
+        if "medgemini_summary_hi" in ai:
+            updates["ai.medgemini_summary_hi"] = DELETE
+        if "medgemini_summary_i18n" in ai:
+            updates["ai.medgemini_summary_i18n"] = DELETE
 
     if remove_fields:
         if "ai" in doc_data:
@@ -71,7 +86,12 @@ def build_cleanup_updates(doc_data: Dict[str, Any], remove_fields: bool) -> Dict
     return updates
 
 
-def run_cleanup(apply: bool, limit: Optional[int], remove_fields: bool) -> None:
+def run_cleanup(
+    apply: bool,
+    limit: Optional[int],
+    remove_fields: bool,
+    remove_summary: bool,
+) -> None:
     db = init_firestore_client()
     docs = db.collection("patients").stream()
 
@@ -85,7 +105,11 @@ def run_cleanup(apply: bool, limit: Optional[int], remove_fields: bool) -> None:
         scanned += 1
 
         data = snap.to_dict() or {}
-        updates = build_cleanup_updates(data, remove_fields=remove_fields)
+        updates = build_cleanup_updates(
+            data,
+            remove_fields=remove_fields,
+            remove_summary=remove_summary,
+        )
         if not updates:
             continue
 
@@ -103,7 +127,9 @@ def run_cleanup(apply: bool, limit: Optional[int], remove_fields: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Remove dummy AI/rank fields and AI workflow events from patient docs.")
+    parser = argparse.ArgumentParser(
+        description="Remove dummy AI summaries and AI workflow events from patient docs."
+    )
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -116,13 +142,23 @@ def main() -> None:
         help="Optional max number of patient docs to scan.",
     )
     parser.add_argument(
-        "--keep-ai-fields",
+        "--remove-ai-fields",
         action="store_true",
-        help="Only remove AI workflow events and keep ai/rank/doctor fields untouched.",
+        help="Also remove whole ai/rank/doctor fields. By default, only AI summary text + AI workflow events are removed.",
+    )
+    parser.add_argument(
+        "--keep-ai-summary",
+        action="store_true",
+        help="Keep ai.medgemini_summary* fields and only clean workflow events (and optional whole-field removal).",
     )
     args = parser.parse_args()
 
-    run_cleanup(apply=args.apply, limit=args.limit, remove_fields=not args.keep_ai_fields)
+    run_cleanup(
+        apply=args.apply,
+        limit=args.limit,
+        remove_fields=args.remove_ai_fields,
+        remove_summary=not args.keep_ai_summary,
+    )
 
 
 if __name__ == "__main__":
