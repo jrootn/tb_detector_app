@@ -228,12 +228,12 @@ def verify_firebase_token(request: Request) -> Dict[str, Any]:
 # ----------------------
 app = FastAPI(title="Smart TB Triage System", version="1.0.0")
 
+_default_origins = "http://localhost:3000,http://127.0.0.1:3000"
+_cors_origins = [origin.strip() for origin in os.environ.get("CORS_ORIGINS", _default_origins).split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
