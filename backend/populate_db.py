@@ -381,6 +381,10 @@ def build_patient(
     lng = round(coords["lng"], 5)
 
     risk_factor_answers = {key: random.choice(ANSWER_CHOICES) for key in RISK_FACTORS}
+    has_night_sweats = any(s.get("symptom_code") == "NIGHT_SWEATS" for s in symptoms)
+    has_weight_loss = any(s.get("symptom_code") == "WEIGHT_LOSS" for s in symptoms)
+    risk_factor_answers["nightSweats"] = "yes" if has_night_sweats else random.choice(["no", "dontKnow"])
+    risk_factor_answers["weightLoss"] = "yes" if has_weight_loss else random.choice(["no", "dontKnow"])
     risk_factors_positive = [key for key, val in risk_factor_answers.items() if val == "yes"]
 
     patient_local_id = f"local-{idx + 1}-{uuid.uuid4().hex[:6]}"
@@ -445,6 +449,11 @@ def build_patient(
             "cough_duration_days": random.randint(1, 90),
             "cough_nature": random.choice(["DRY", "WET", "BLOOD_STAINED"]),
             "fever_history": random.choice(["NONE", "LOW_GRADE", "HIGH_GRADE"]),
+            "night_sweats": "YES" if has_night_sweats else "NO",
+            "weight_loss": "YES" if has_weight_loss else "NO",
+            "heart_rate_bpm": random.randint(62, 118),
+            "body_temperature_c": round(random.uniform(36.1, 39.6), 1),
+            "body_temperature_source_unit": "C",
             "physical_signs": random.sample(PHYSICAL_SIGNS, random.randint(0, 3)),
             "risk_factors": risk_factors_positive,
             "risk_factor_answers": risk_factor_answers,

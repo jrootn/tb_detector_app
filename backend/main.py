@@ -102,6 +102,11 @@ class Clinical(BaseModel):
     cough_duration_days: Optional[int] = None
     cough_nature: Optional[str] = None
     fever_history: Optional[str] = None
+    night_sweats: Optional[str] = None
+    weight_loss: Optional[str] = None
+    heart_rate_bpm: Optional[float] = None
+    body_temperature_c: Optional[float] = None
+    body_temperature_source_unit: Optional[str] = None
     physical_signs: List[str] = Field(default_factory=list)
     risk_factors: List[str] = Field(default_factory=list)
     risk_factor_answers: Dict[str, str] = Field(default_factory=dict)

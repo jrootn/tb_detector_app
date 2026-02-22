@@ -24,11 +24,17 @@ export interface DBPatient {
   testScheduled: boolean
   weight?: number
   height?: number
+  heartRateBpm?: number
+  bodyTemperature?: number
+  bodyTemperatureUnit?: "C" | "F"
   coughDuration?: number
   coughNature?: "dry" | "wet" | "bloodStained"
   feverHistory?: "none" | "lowGrade" | "highGrade"
+  nightSweats?: "yes" | "no" | "dontKnow" | "preferNotToSay"
+  weightLoss?: "yes" | "no" | "dontKnow" | "preferNotToSay"
   physicalSigns?: string[]
   riskFactors?: string[]
+  riskFactorAnswers?: Record<string, "yes" | "no" | "dontKnow" | "preferNotToSay">
   otherObservations?: string
   hearAudioScore?: number
   medGemmaReasoning?: string

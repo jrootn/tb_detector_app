@@ -1,5 +1,6 @@
 export type RiskLevel = "high" | "medium" | "low"
 export type PatientStatus = "awaitingDoctor" | "testPending" | "underTreatment" | "cleared"
+export type RiskFactorAnswer = "yes" | "no" | "dontKnow" | "preferNotToSay"
 
 export interface Patient {
   id: string
@@ -24,13 +25,19 @@ export interface Patient {
   // Vitals
   weight?: number
   height?: number
+  heartRateBpm?: number
+  bodyTemperature?: number
+  bodyTemperatureUnit?: "C" | "F"
   
   // Clinical Data
   coughDuration?: number
   coughNature?: "dry" | "wet" | "bloodStained"
   feverHistory?: "none" | "lowGrade" | "highGrade"
+  nightSweats?: RiskFactorAnswer
+  weightLoss?: RiskFactorAnswer
   physicalSigns?: string[]
   riskFactors?: string[]
+  riskFactorAnswers?: Record<string, RiskFactorAnswer>
   otherObservations?: string
   
   // AI Analysis

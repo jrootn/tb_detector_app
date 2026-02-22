@@ -76,6 +76,8 @@ interface Translations {
   // Vitals
   weight: string
   height: string
+  heartRate: string
+  bodyTemperature: string
   
   // Clinical Questionnaire
   coughDuration: string
@@ -90,6 +92,9 @@ interface Translations {
   none: string
   lowGrade: string
   highGradeNightSweats: string
+  criticalPredictors: string
+  nightSweats: string
+  weightLoss: string
   physicalSigns: string
   chestPain: string
   shortnessOfBreath: string
@@ -226,6 +231,8 @@ const translations: Record<Language, Translations> = {
     
     weight: "Weight (kg)",
     height: "Height (cm)",
+    heartRate: "Heart Rate (bpm)",
+    bodyTemperature: "Body Temperature (°C)",
     
     coughDuration: "Cough Duration",
     weeks: "weeks",
@@ -239,6 +246,9 @@ const translations: Record<Language, Translations> = {
     none: "None",
     lowGrade: "Low Grade",
     highGradeNightSweats: "High Grade (Night Sweats)",
+    criticalPredictors: "Critical Predictors",
+    nightSweats: "Night Sweats",
+    weightLoss: "Unintentional Weight Loss",
     physicalSigns: "Physical Signs",
     chestPain: "Chest Pain",
     shortnessOfBreath: "Shortness of Breath",
@@ -367,6 +377,8 @@ const translations: Record<Language, Translations> = {
     
     weight: "वजन (किग्रा)",
     height: "ऊंचाई (सेमी)",
+    heartRate: "हृदय गति (bpm)",
+    bodyTemperature: "शरीर का तापमान (°C)",
     
     coughDuration: "खांसी की अवधि",
     weeks: "सप्ताह",
@@ -380,6 +392,9 @@ const translations: Record<Language, Translations> = {
     none: "कोई नहीं",
     lowGrade: "हल्का",
     highGradeNightSweats: "तेज (रात को पसीना)",
+    criticalPredictors: "महत्वपूर्ण संकेतक",
+    nightSweats: "रात को पसीना",
+    weightLoss: "अनचाहा वजन कम होना",
     physicalSigns: "शारीरिक लक्षण",
     chestPain: "सीने में दर्द",
     shortnessOfBreath: "सांस की तकलीफ",

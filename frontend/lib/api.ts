@@ -1,4 +1,4 @@
-import type { Patient } from "./mockData"
+import type { Patient, RiskFactorAnswer } from "./mockData"
 
 export interface ScreeningData {
   // Identity
@@ -17,8 +17,11 @@ export interface ScreeningData {
   coughDuration: number
   coughNature: "dry" | "wet" | "bloodStained"
   feverHistory: "none" | "lowGrade" | "highGrade"
+  nightSweats?: RiskFactorAnswer
+  weightLoss?: RiskFactorAnswer
   physicalSigns: string[]
   riskFactors: string[]
+  riskFactorAnswers?: Record<string, RiskFactorAnswer>
   otherObservations: string
 
   // Audio recordings (simulated)
@@ -32,6 +35,9 @@ export interface ScreeningData {
   submittedAt: string
   ashaWorkerId: string
   isOffline: boolean
+  heartRateBpm?: number
+  bodyTemperature?: number
+  bodyTemperatureUnit?: "C" | "F"
 }
 
 export function submitScreening(data: ScreeningData): Promise<{ success: boolean; patientId: string }> {
@@ -53,13 +59,21 @@ export function submitScreening(data: ScreeningData): Promise<{ success: boolean
     console.log("  Weight:", data.weight, "kg")
     console.log("  Height:", data.height, "cm")
     console.log("  BMI:", (data.weight / Math.pow(data.height / 100, 2)).toFixed(1))
+    console.log("  Heart Rate:", data.heartRateBpm ?? "Not provided", "bpm")
+    console.log(
+      "  Body Temperature:",
+      data.bodyTemperature != null ? `${data.bodyTemperature}°${data.bodyTemperatureUnit || "C"}` : "Not provided"
+    )
     console.log("")
     console.log("CLINICAL QUESTIONNAIRE:")
     console.log("  Cough Duration:", data.coughDuration, "weeks")
     console.log("  Cough Nature:", data.coughNature)
     console.log("  Fever History:", data.feverHistory)
+    console.log("  Night Sweats:", data.nightSweats || "Not provided")
+    console.log("  Weight Loss:", data.weightLoss || "Not provided")
     console.log("  Physical Signs:", data.physicalSigns.length > 0 ? data.physicalSigns.join(", ") : "None")
     console.log("  Risk Factors:", data.riskFactors.length > 0 ? data.riskFactors.join(", ") : "None")
+    console.log("  Risk Factor Answers:", data.riskFactorAnswers ? JSON.stringify(data.riskFactorAnswers) : "{}")
     console.log("  Other Observations:", data.otherObservations || "None")
     console.log("")
     console.log("AUDIO RECORDINGS:")
@@ -87,6 +101,15 @@ export function submitScreening(data: ScreeningData): Promise<{ success: boolean
 
 export function calculateRiskScore(data: Partial<ScreeningData>): number {
   let score = 0
+  const answers = data.riskFactorAnswers || {}
+  const hasPositive = (code: string) =>
+    answers[code] === "yes" || Boolean(data.riskFactors && data.riskFactors.includes(code))
+  const tempC =
+    data.bodyTemperature == null
+      ? null
+      : data.bodyTemperatureUnit === "F"
+      ? (data.bodyTemperature - 32) * (5 / 9)
+      : data.bodyTemperature
 
   // Cough duration (0-3 points)
   if (data.coughDuration) {
@@ -103,20 +126,26 @@ export function calculateRiskScore(data: Partial<ScreeningData>): number {
   if (data.feverHistory === "highGrade") score += 2
   else if (data.feverHistory === "lowGrade") score += 1
 
+  // Additional critical predictors
+  if (data.nightSweats === "yes" || hasPositive("nightSweats")) score += 1.5
+  if (data.weightLoss === "yes" || hasPositive("weightLoss")) score += 1.2
+
   // Physical signs (0-2 points)
   if (data.physicalSigns) {
     score += Math.min(data.physicalSigns.length * 0.5, 2)
   }
 
   // Risk factors (0-3 points)
-  if (data.riskFactors) {
-    if (data.riskFactors.includes("historyOfTB")) score += 1
-    if (data.riskFactors.includes("familyMemberHasTB")) score += 0.5
-    if (data.riskFactors.includes("diabetes")) score += 0.3
-    if (data.riskFactors.includes("smoker")) score += 0.2
-    if (data.riskFactors.includes("historyOfHIV")) score += 1.5
-    if (data.riskFactors.includes("historyOfCovid")) score += 0.3
-  }
+  if (hasPositive("historyOfTB")) score += 1
+  if (hasPositive("familyMemberHasTB")) score += 0.5
+  if (hasPositive("diabetes")) score += 0.3
+  if (hasPositive("smoker")) score += 0.2
+  if (hasPositive("historyOfHIV")) score += 1.5
+  if (hasPositive("historyOfCovid")) score += 0.3
+
+  // Optional vitals
+  if (data.heartRateBpm != null && data.heartRateBpm > 110) score += 0.4
+  if (tempC != null && tempC >= 38) score += 0.6
 
   // Normalize to 0-10 scale
   return Math.min(Math.round(score * 10) / 10, 10)

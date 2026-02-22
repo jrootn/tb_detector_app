@@ -100,6 +100,47 @@ function mapFeverToApi(value?: Patient["feverHistory"]): string | null {
   }
 }
 
+function mapRiskAnswerToApi(value?: Patient["nightSweats"]): string | null {
+  switch (value) {
+    case "yes":
+      return "YES"
+    case "no":
+      return "NO"
+    case "dontKnow":
+      return "DONT_KNOW"
+    case "preferNotToSay":
+      return "PREFER_NOT_TO_SAY"
+    default:
+      return null
+  }
+}
+
+function toCelsius(value?: number, unit?: Patient["bodyTemperatureUnit"]): number | null {
+  if (value == null || Number.isNaN(value)) return null
+  const celsius = unit === "F" ? (value - 32) * (5 / 9) : value
+  return Math.round(celsius * 10) / 10
+}
+
+function buildSymptomList(patient: Patient) {
+  const symptoms: Array<{ symptom_code: string; severity: null; duration_days: number | null }> = []
+  if (patient.coughDuration && patient.coughDuration > 0) {
+    symptoms.push({ symptom_code: "COUGH", severity: null, duration_days: patient.coughDuration })
+  }
+  if (patient.feverHistory === "highGrade") {
+    symptoms.push({ symptom_code: "FEVER_HIGH", severity: null, duration_days: null })
+  }
+  if (patient.nightSweats === "yes" || patient.riskFactorAnswers?.nightSweats === "yes") {
+    symptoms.push({ symptom_code: "NIGHT_SWEATS", severity: null, duration_days: null })
+  }
+  if (patient.weightLoss === "yes" || patient.riskFactorAnswers?.weightLoss === "yes") {
+    symptoms.push({ symptom_code: "WEIGHT_LOSS", severity: null, duration_days: null })
+  }
+  if (patient.physicalSigns?.includes("chestPain")) {
+    symptoms.push({ symptom_code: "CHEST_PAIN", severity: null, duration_days: null })
+  }
+  return symptoms
+}
+
 function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string, assignment?: AssignmentContext) {
   return {
     patient_local_id: patient.id,
@@ -126,14 +167,19 @@ function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string, assignme
       weight_kg: patient.weight || null,
       height_cm: patient.height || null,
     },
-    symptoms: [],
+    symptoms: buildSymptomList(patient),
     clinical: {
       cough_duration_days: patient.coughDuration || null,
       cough_nature: mapCoughNatureToApi(patient.coughNature),
       fever_history: mapFeverToApi(patient.feverHistory),
+      night_sweats: mapRiskAnswerToApi(patient.nightSweats || patient.riskFactorAnswers?.nightSweats),
+      weight_loss: mapRiskAnswerToApi(patient.weightLoss || patient.riskFactorAnswers?.weightLoss),
+      heart_rate_bpm: patient.heartRateBpm || null,
+      body_temperature_c: toCelsius(patient.bodyTemperature, patient.bodyTemperatureUnit),
+      body_temperature_source_unit: patient.bodyTemperatureUnit || null,
       physical_signs: patient.physicalSigns || [],
       risk_factors: patient.riskFactors || [],
-      risk_factor_answers: {},
+      risk_factor_answers: patient.riskFactorAnswers || {},
       other_observations: patient.otherObservations || null,
     },
     audio: [],
@@ -190,14 +236,19 @@ function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, ass
       weight_kg: patient.weight || null,
       height_cm: patient.height || null,
     },
-    symptoms: [],
+    symptoms: buildSymptomList(patient),
     clinical: {
       cough_duration_days: patient.coughDuration || null,
       cough_nature: mapCoughNatureToApi(patient.coughNature),
       fever_history: mapFeverToApi(patient.feverHistory),
+      night_sweats: mapRiskAnswerToApi(patient.nightSweats || patient.riskFactorAnswers?.nightSweats),
+      weight_loss: mapRiskAnswerToApi(patient.weightLoss || patient.riskFactorAnswers?.weightLoss),
+      heart_rate_bpm: patient.heartRateBpm || null,
+      body_temperature_c: toCelsius(patient.bodyTemperature, patient.bodyTemperatureUnit),
+      body_temperature_source_unit: patient.bodyTemperatureUnit || null,
       physical_signs: patient.physicalSigns || [],
       risk_factors: patient.riskFactors || [],
-      risk_factor_answers: {},
+      risk_factor_answers: patient.riskFactorAnswers || {},
       other_observations: patient.otherObservations || null,
     },
     audio: [],

@@ -107,9 +107,21 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
         return t.historyOfCovid
       case "historyOfHIV":
         return t.historyOfHIV
+      case "nightSweats":
+        return t.nightSweats
+      case "weightLoss":
+        return t.weightLoss
       default:
         return factor
     }
+  }
+
+  const getAnswerLabel = (answer?: Patient["nightSweats"]) => {
+    if (!answer) return "-"
+    if (answer === "yes") return t.yes
+    if (answer === "no") return t.no
+    if (answer === "dontKnow") return t.dontKnow
+    return t.preferNotToSay
   }
   
   const stages = [
@@ -259,7 +271,7 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
                 <CardTitle className="text-base">{t.vitals}</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                   <div>
                     <p className="text-sm text-muted-foreground">{t.weight}</p>
                     <p className="font-medium">{patient.weight || "-"} kg</p>
@@ -267,6 +279,16 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
                   <div>
                     <p className="text-sm text-muted-foreground">{t.height}</p>
                     <p className="font-medium">{patient.height || "-"} cm</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.heartRate}</p>
+                    <p className="font-medium">{patient.heartRateBpm || "-"} bpm</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.bodyTemperature}</p>
+                    <p className="font-medium">
+                      {patient.bodyTemperature != null ? `${patient.bodyTemperature}°${patient.bodyTemperatureUnit || "C"}` : "-"}
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -294,6 +316,17 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
                 <div>
                   <p className="text-sm text-muted-foreground">{t.feverHistory}</p>
                   <p className="font-medium">{getFeverLabel(patient.feverHistory)}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.nightSweats}</p>
+                    <p className="font-medium">{getAnswerLabel(patient.nightSweats)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.weightLoss}</p>
+                    <p className="font-medium">{getAnswerLabel(patient.weightLoss)}</p>
+                  </div>
                 </div>
 
                 {patient.physicalSigns && patient.physicalSigns.length > 0 && (

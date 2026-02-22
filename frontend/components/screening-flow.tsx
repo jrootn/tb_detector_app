@@ -58,11 +58,16 @@ interface FormData {
   // Vitals
   weight: string
   height: string
+  heartRate: string
+  bodyTemperature: string
+  bodyTemperatureUnit: "C" | "F"
   
   // Clinical
   coughDuration: number // Now in days
   coughNature: CoughNature
   feverHistory: FeverHistory
+  nightSweats: RiskFactorAnswer
+  weightLoss: RiskFactorAnswer
   physicalSigns: string[]
   riskFactors: RiskFactorState
   otherObservations: string
@@ -112,9 +117,14 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     aadhar: "",
     weight: "",
     height: "",
+    heartRate: "",
+    bodyTemperature: "",
+    bodyTemperatureUnit: "C",
     coughDuration: 0,
     coughNature: "dry",
     feverHistory: "none",
+    nightSweats: "no",
+    weightLoss: "no",
     physicalSigns: [],
     riskFactors: initialRiskFactors,
     otherObservations: "",
@@ -124,6 +134,12 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       slot3: "idle",
     },
   })
+  const answerOptions = [
+    { value: "yes" as const, label: t.yes },
+    { value: "no" as const, label: t.no },
+    { value: "dontKnow" as const, label: t.dontKnow },
+    { value: "preferNotToSay" as const, label: t.preferNotToSay },
+  ]
 
   const validateStep = (stepNumber: number): string | null => {
     const phoneDigits = formData.phone.replace(/\D/g, "")
@@ -148,11 +164,25 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     if (stepNumber === 2) {
       const weight = Number(formData.weight)
       const height = Number(formData.height)
+      const heartRate = Number(formData.heartRate)
+      const bodyTemperature = Number(formData.bodyTemperature)
       if (!Number.isFinite(weight) || weight <= 0) {
         return language === "en" ? "Please enter valid weight." : "कृपया सही वजन दर्ज करें।"
       }
       if (!Number.isFinite(height) || height <= 0) {
         return language === "en" ? "Please enter valid height." : "कृपया सही ऊंचाई दर्ज करें।"
+      }
+      if (formData.heartRate.trim() && (!Number.isFinite(heartRate) || heartRate < 20 || heartRate > 250)) {
+        return language === "en" ? "Heart rate should be between 20 and 250 bpm." : "हृदय गति 20 से 250 bpm के बीच होनी चाहिए।"
+      }
+      if (formData.bodyTemperature.trim()) {
+        const min = formData.bodyTemperatureUnit === "F" ? 86 : 30
+        const max = formData.bodyTemperatureUnit === "F" ? 113 : 45
+        if (!Number.isFinite(bodyTemperature) || bodyTemperature < min || bodyTemperature > max) {
+          return language === "en"
+            ? `Temperature should be between ${min} and ${max}°${formData.bodyTemperatureUnit}.`
+            : `तापमान ${min} और ${max}°${formData.bodyTemperatureUnit} के बीच होना चाहिए।`
+        }
       }
     }
     if (stepNumber === 4 && !uploadedAudioName) {
@@ -303,8 +333,21 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     setFormError("")
     setIsSubmitting(true)
 
-    // Convert risk factors to array of positive responses
-    const positiveRiskFactors = Object.entries(formData.riskFactors)
+    const riskFactorAnswers = {
+      ...formData.riskFactors,
+      nightSweats: formData.nightSweats,
+      weightLoss: formData.weightLoss,
+    }
+    const parsedBodyTemperature = formData.bodyTemperature ? parseFloat(formData.bodyTemperature) : undefined
+    const normalizedBodyTemperature =
+      parsedBodyTemperature == null || Number.isNaN(parsedBodyTemperature)
+        ? undefined
+        : formData.bodyTemperatureUnit === "F"
+        ? Math.round((((parsedBodyTemperature - 32) * 5) / 9) * 10) / 10
+        : parsedBodyTemperature
+
+    // Keep positive flags for lightweight ranking UIs, while preserving full answers separately.
+    const positiveRiskFactors = Object.entries(riskFactorAnswers)
       .filter(([, value]) => value === "yes")
       .map(([key]) => key)
 
@@ -322,8 +365,11 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       coughDuration: Math.ceil(formData.coughDuration / 7), // Convert days to weeks for API
       coughNature: formData.coughNature,
       feverHistory: formData.feverHistory,
+      nightSweats: formData.nightSweats,
+      weightLoss: formData.weightLoss,
       physicalSigns: formData.physicalSigns,
       riskFactors: positiveRiskFactors,
+      riskFactorAnswers,
       otherObservations: formData.otherObservations,
       audioRecordings: {
         slot1: formData.audioRecordings.slot1 === "good",
@@ -333,6 +379,9 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       submittedAt: new Date().toISOString(),
       ashaWorkerId: ashaId,
       isOffline: !isOnline,
+      heartRateBpm: formData.heartRate ? parseFloat(formData.heartRate) : undefined,
+      bodyTemperature: normalizedBodyTemperature,
+      bodyTemperatureUnit: "C",
     }
 
     const result = await submitScreening(screeningData)
@@ -355,6 +404,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       address: formData.address,
       addressHi: formData.address,
       pincode: formData.pincode,
+      aadhar: formData.aadhar || undefined,
       village: formData.address.split(",").pop()?.trim() || formData.address,
       villageHi: formData.address.split(",").pop()?.trim() || formData.address,
       riskScore,
@@ -365,11 +415,17 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       testScheduled: false,
       weight: parseFloat(formData.weight) || undefined,
       height: parseFloat(formData.height) || undefined,
+      heartRateBpm: formData.heartRate ? parseFloat(formData.heartRate) : undefined,
+      bodyTemperature: normalizedBodyTemperature,
+      bodyTemperatureUnit: "C",
       coughDuration: formData.coughDuration,
       coughNature: formData.coughNature,
       feverHistory: formData.feverHistory,
+      nightSweats: formData.nightSweats,
+      weightLoss: formData.weightLoss,
       physicalSigns: formData.physicalSigns,
       riskFactors: positiveRiskFactors,
+      riskFactorAnswers,
       otherObservations: formData.otherObservations,
       hearAudioScore: Math.random() * 0.5 + 0.3,
       medGemmaReasoning: generateAIReasoning(screeningData),
@@ -624,6 +680,46 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                   placeholder="e.g., 165"
                 />
               </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="heartRate">{t.heartRate} <span className="text-muted-foreground text-sm">({t.optional})</span></Label>
+                  <Input
+                    id="heartRate"
+                    type="number"
+                    value={formData.heartRate}
+                    onChange={(e) => setFormData({ ...formData, heartRate: e.target.value })}
+                    className="h-11"
+                    placeholder="e.g., 88"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bodyTemperature">{t.bodyTemperature} <span className="text-muted-foreground text-sm">({t.optional})</span></Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="bodyTemperature"
+                      type="number"
+                      value={formData.bodyTemperature}
+                      onChange={(e) => setFormData({ ...formData, bodyTemperature: e.target.value })}
+                      className="h-11"
+                      placeholder={formData.bodyTemperatureUnit === "C" ? "e.g., 37.2" : "e.g., 99.0"}
+                    />
+                    <select
+                      className="h-11 w-20 rounded-md border px-2 text-sm bg-background"
+                      value={formData.bodyTemperatureUnit}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          bodyTemperatureUnit: e.target.value === "F" ? "F" : "C",
+                        })
+                      }
+                    >
+                      <option value="C">C</option>
+                      <option value="F">F</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -730,6 +826,63 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
               </CardContent>
             </Card>
 
+            {/* Critical Predictors */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t.criticalPredictors}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">{t.nightSweats}</Label>
+                  <RadioGroup
+                    value={formData.nightSweats}
+                    onValueChange={(value) => setFormData({ ...formData, nightSweats: value as RiskFactorAnswer })}
+                    className="flex flex-wrap gap-2"
+                  >
+                    {answerOptions.map((option) => (
+                      <div key={option.value} className="flex items-center">
+                        <RadioGroupItem value={option.value} id={`nightSweats-${option.value}`} className="peer sr-only" />
+                        <Label
+                          htmlFor={`nightSweats-${option.value}`}
+                          className={`px-3 py-1.5 rounded-md border cursor-pointer text-sm transition-colors ${
+                            formData.nightSweats === option.value
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background border-input hover:bg-muted"
+                          }`}
+                        >
+                          {option.label}
+                        </Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">{t.weightLoss}</Label>
+                  <RadioGroup
+                    value={formData.weightLoss}
+                    onValueChange={(value) => setFormData({ ...formData, weightLoss: value as RiskFactorAnswer })}
+                    className="flex flex-wrap gap-2"
+                  >
+                    {answerOptions.map((option) => (
+                      <div key={option.value} className="flex items-center">
+                        <RadioGroupItem value={option.value} id={`weightLoss-${option.value}`} className="peer sr-only" />
+                        <Label
+                          htmlFor={`weightLoss-${option.value}`}
+                          className={`px-3 py-1.5 rounded-md border cursor-pointer text-sm transition-colors ${
+                            formData.weightLoss === option.value
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background border-input hover:bg-muted"
+                          }`}
+                        >
+                          {option.label}
+                        </Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                </div>
+              </CardContent>
+            </Card>
+
             {/* Physical Signs */}
             <Card>
               <CardHeader className="pb-2">
@@ -785,12 +938,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                       onValueChange={(value) => updateRiskFactor(factor.id, value as RiskFactorAnswer)}
                       className="flex flex-wrap gap-2"
                     >
-                      {[
-                        { value: "yes", label: t.yes },
-                        { value: "no", label: t.no },
-                        { value: "dontKnow", label: t.dontKnow },
-                        { value: "preferNotToSay", label: t.preferNotToSay },
-                      ].map((option) => (
+                      {answerOptions.map((option) => (
                         <div key={option.value} className="flex items-center">
                           <RadioGroupItem
                             value={option.value}
@@ -932,6 +1080,8 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
 
 function generateAIReasoning(data: ScreeningData): string {
   const reasons: string[] = []
+  const hasPositive = (key: string) =>
+    data.riskFactorAnswers?.[key] === "yes" || data.riskFactors.includes(key)
 
   if (data.coughNature === "bloodStained") {
     reasons.push("Hemoptysis present - significant TB indicator")
@@ -942,19 +1092,25 @@ function generateAIReasoning(data: ScreeningData): string {
   if (data.feverHistory === "highGrade") {
     reasons.push("Night sweats and high-grade fever reported")
   }
+  if (data.nightSweats === "yes" || hasPositive("nightSweats")) {
+    reasons.push("Night sweats reported")
+  }
+  if (data.weightLoss === "yes" || hasPositive("weightLoss")) {
+    reasons.push("Unintentional weight loss reported")
+  }
   if (data.physicalSigns.length > 2) {
     reasons.push("Multiple constitutional symptoms present")
   }
-  if (data.riskFactors.includes("historyOfTB")) {
+  if (hasPositive("historyOfTB")) {
     reasons.push("Previous TB history increases recurrence risk")
   }
-  if (data.riskFactors.includes("familyMemberHasTB")) {
+  if (hasPositive("familyMemberHasTB")) {
     reasons.push("Household TB contact - high exposure risk")
   }
-  if (data.riskFactors.includes("historyOfHIV")) {
+  if (hasPositive("historyOfHIV")) {
     reasons.push("HIV positive - significantly increased TB risk")
   }
-  if (data.riskFactors.includes("historyOfCovid")) {
+  if (hasPositive("historyOfCovid")) {
     reasons.push("Post-COVID respiratory symptoms require evaluation")
   }
 
