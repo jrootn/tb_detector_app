@@ -146,6 +146,10 @@ export function UserProfileSettings({ expectedRole, title = "My Profile", onBack
         { merge: true }
       )
       setPhone(phoneDigits)
+      if (typeof window !== "undefined") {
+        localStorage.setItem("user_preferred_language", preferredLanguage)
+        localStorage.setItem("app_language", preferredLanguage)
+      }
       toast.success("Profile updated.")
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not update profile."

@@ -34,6 +34,12 @@ export default function AshaPage() {
           localStorage.setItem("user_name", data.name)
           setAshaName(data.name)
         }
+        if (data?.preferred_language === "en" || data?.preferred_language === "hi") {
+          localStorage.setItem("user_preferred_language", data.preferred_language)
+          if (!localStorage.getItem("app_language")) {
+            localStorage.setItem("app_language", data.preferred_language)
+          }
+        }
       } catch (error) {
         const cachedRole = localStorage.getItem("user_role")
         const cachedName = localStorage.getItem("user_name")

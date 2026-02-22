@@ -427,8 +427,6 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       riskFactors: positiveRiskFactors,
       riskFactorAnswers,
       otherObservations: formData.otherObservations,
-      hearAudioScore: Math.random() * 0.5 + 0.3,
-      medGemmaReasoning: generateAIReasoning(screeningData),
       createdAt: today,
       collectionDate: today,
       latitude: gpsLocation.latitude || undefined,
@@ -1076,47 +1074,4 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       </div>
     </div>
   )
-}
-
-function generateAIReasoning(data: ScreeningData): string {
-  const reasons: string[] = []
-  const hasPositive = (key: string) =>
-    data.riskFactorAnswers?.[key] === "yes" || data.riskFactors.includes(key)
-
-  if (data.coughNature === "bloodStained") {
-    reasons.push("Hemoptysis present - significant TB indicator")
-  }
-  if (data.coughDuration >= 4) {
-    reasons.push(`Prolonged cough of ${data.coughDuration}+ weeks`)
-  }
-  if (data.feverHistory === "highGrade") {
-    reasons.push("Night sweats and high-grade fever reported")
-  }
-  if (data.nightSweats === "yes" || hasPositive("nightSweats")) {
-    reasons.push("Night sweats reported")
-  }
-  if (data.weightLoss === "yes" || hasPositive("weightLoss")) {
-    reasons.push("Unintentional weight loss reported")
-  }
-  if (data.physicalSigns.length > 2) {
-    reasons.push("Multiple constitutional symptoms present")
-  }
-  if (hasPositive("historyOfTB")) {
-    reasons.push("Previous TB history increases recurrence risk")
-  }
-  if (hasPositive("familyMemberHasTB")) {
-    reasons.push("Household TB contact - high exposure risk")
-  }
-  if (hasPositive("historyOfHIV")) {
-    reasons.push("HIV positive - significantly increased TB risk")
-  }
-  if (hasPositive("historyOfCovid")) {
-    reasons.push("Post-COVID respiratory symptoms require evaluation")
-  }
-
-  if (reasons.length === 0) {
-    return "Low clinical suspicion based on current symptoms. Monitor and follow up if symptoms persist or worsen."
-  }
-
-  return reasons.join(". ") + ". Recommend further evaluation and TB testing."
 }

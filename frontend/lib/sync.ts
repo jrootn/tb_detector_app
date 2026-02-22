@@ -1,7 +1,7 @@
 import { getAllPatients, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
 import type { Patient } from "@/lib/mockData"
 import { auth, db, storage } from "@/lib/firebase"
-import { doc, updateDoc, arrayUnion, setDoc, getDoc, collection, getDocs } from "firebase/firestore"
+import { doc, updateDoc, arrayUnion, setDoc, getDoc, collection, getDocs, query, where } from "firebase/firestore"
 import { ref, uploadBytes } from "firebase/storage"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
@@ -47,6 +47,20 @@ function mapStatusToApi(status?: Patient["status"]): string {
       return "CLOSED"
     default:
       return "TEST_QUEUED"
+  }
+}
+
+function mapStatusFromApi(status?: string): Patient["status"] {
+  switch ((status || "").toUpperCase()) {
+    case "ASHA_ACTION_IN_PROGRESS":
+      return "underTreatment"
+    case "CLOSED":
+      return "cleared"
+    case "DOCTOR_FINALIZED":
+    case "LAB_DONE":
+      return "testPending"
+    default:
+      return "awaitingDoctor"
   }
 }
 
@@ -98,6 +112,99 @@ function mapFeverToApi(value?: Patient["feverHistory"]): string | null {
     default:
       return null
   }
+}
+
+function mapCoughNatureFromApi(value?: string): Patient["coughNature"] | undefined {
+  switch ((value || "").toUpperCase()) {
+    case "DRY":
+      return "dry"
+    case "WET":
+      return "wet"
+    case "BLOOD_STAINED":
+      return "bloodStained"
+    default:
+      return undefined
+  }
+}
+
+function mapFeverFromApi(value?: string): Patient["feverHistory"] | undefined {
+  switch ((value || "").toUpperCase()) {
+    case "NONE":
+      return "none"
+    case "LOW_GRADE":
+      return "lowGrade"
+    case "HIGH_GRADE":
+      return "highGrade"
+    default:
+      return undefined
+  }
+}
+
+function mapRiskAnswerFromApi(value?: string): Patient["nightSweats"] | undefined {
+  switch ((value || "").toUpperCase()) {
+    case "YES":
+      return "yes"
+    case "NO":
+      return "no"
+    case "PREFER_NOT_TO_SAY":
+      return "preferNotToSay"
+    case "DONT_KNOW":
+      return "dontKnow"
+    default:
+      return undefined
+  }
+}
+
+function normalizeRiskFactorKey(raw: string): string {
+  const normalized = raw.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()
+  if (normalized === "historytb" || normalized === "historyoftb") return "historyOfTB"
+  if (normalized === "familytb" || normalized === "familymemberhastb") return "familyMemberHasTB"
+  if (normalized === "diabetes") return "diabetes"
+  if (normalized === "smoker") return "smoker"
+  if (normalized === "historyofcovid" || normalized === "covid" || normalized === "covid19") return "historyOfCovid"
+  if (normalized === "historyofhiv" || normalized === "hiv" || normalized === "aids") return "historyOfHIV"
+  if (normalized === "nightsweats") return "nightSweats"
+  if (normalized === "weightloss") return "weightLoss"
+  return raw
+}
+
+function normalizePhysicalSign(raw: string): string {
+  const normalized = raw.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()
+  if (normalized === "chestpain") return "chestPain"
+  if (normalized === "shortnessofbreath") return "shortnessOfBreath"
+  if (normalized === "lossofappetite") return "lossOfAppetite"
+  if (normalized === "extremefatigue") return "extremeFatigue"
+  return raw
+}
+
+function toDateOnly(value?: string): string {
+  if (!value) return new Date().toISOString().split("T")[0]
+  const date = new Date(value)
+  if (!Number.isNaN(date.getTime())) {
+    return date.toISOString().split("T")[0]
+  }
+  return value.split("T")[0]
+}
+
+function parseLocalizedSummary(ai: Record<string, unknown>): { en?: string; hi?: string } {
+  const result: { en?: string; hi?: string } = {}
+  const direct = ai.medgemini_summary
+  const nested = ai.medgemini_summary_i18n
+  if (typeof direct === "string") {
+    result.en = direct
+  } else if (direct && typeof direct === "object") {
+    const map = direct as Record<string, unknown>
+    if (typeof map.en === "string") result.en = map.en
+    if (typeof map.hi === "string") result.hi = map.hi
+  }
+  if (typeof ai.medgemini_summary_en === "string") result.en = ai.medgemini_summary_en
+  if (typeof ai.medgemini_summary_hi === "string") result.hi = ai.medgemini_summary_hi
+  if (nested && typeof nested === "object") {
+    const map = nested as Record<string, unknown>
+    if (typeof map.en === "string") result.en = map.en
+    if (typeof map.hi === "string") result.hi = map.hi
+  }
+  return result
 }
 
 function mapRiskAnswerToApi(value?: Patient["nightSweats"]): string | null {
@@ -198,15 +305,7 @@ function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string, assignme
   }
 }
 
-function getRiskLevel(score: number): "HIGH" | "MEDIUM" | "LOW" {
-  if (score >= 7) return "HIGH"
-  if (score >= 4) return "MEDIUM"
-  return "LOW"
-}
-
 function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, assignment?: AssignmentContext) {
-  const riskScore = Number(patient.riskScore || 0)
-  const hearScore = Number(patient.hearAudioScore ?? Math.max(0, Math.min(1, riskScore / 10)))
   return {
     patient_local_id: patient.id,
     device_id: "web-app",
@@ -252,13 +351,6 @@ function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, ass
       other_observations: patient.otherObservations || null,
     },
     audio: [],
-    ai: {
-      hear_embedding_id: null,
-      hear_score: hearScore,
-      medgemini_summary: patient.medGemmaReasoning || "AI summary pending",
-      risk_score: riskScore,
-      risk_level: getRiskLevel(riskScore),
-    },
     status: {
       triage_status: mapStatusToApi(patient.status),
     },
@@ -271,6 +363,134 @@ function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, ass
     assigned_lab_tech_id: assignment?.assignedLabTechId || null,
     asha_name: assignment?.ashaName || null,
     asha_phone_number: assignment?.ashaPhone || null,
+  }
+}
+
+function mapFirestorePatientToLocal(
+  patientId: string,
+  data: Record<string, unknown>,
+  existing?: Patient
+): Patient {
+  const demographics = (data.demographics || {}) as Record<string, unknown>
+  const vitals = (data.vitals || {}) as Record<string, unknown>
+  const clinical = (data.clinical || {}) as Record<string, unknown>
+  const ai = (data.ai || {}) as Record<string, unknown>
+  const gps = (data.gps || {}) as Record<string, unknown>
+  const status = (data.status || {}) as Record<string, unknown>
+
+  const localizedSummary = parseLocalizedSummary(ai)
+  const riskScore =
+    typeof ai.risk_score === "number"
+      ? ai.risk_score
+      : typeof existing?.riskScore === "number"
+      ? existing.riskScore
+      : 0
+  const riskLevelRaw = typeof ai.risk_level === "string" ? ai.risk_level.toUpperCase() : ""
+  const riskLevel: Patient["riskLevel"] =
+    riskLevelRaw === "HIGH" ? "high" : riskLevelRaw === "MEDIUM" ? "medium" : riskLevelRaw === "LOW" ? "low" : riskScore >= 7 ? "high" : riskScore >= 4 ? "medium" : "low"
+
+  const rawRiskAnswers = (clinical.risk_factor_answers || {}) as Record<string, unknown>
+  const riskFactorAnswers: NonNullable<Patient["riskFactorAnswers"]> = {}
+  Object.entries(rawRiskAnswers).forEach(([key, value]) => {
+    const normalizedKey = normalizeRiskFactorKey(key)
+    const answer = mapRiskAnswerFromApi(typeof value === "string" ? value : undefined)
+    if (answer) riskFactorAnswers[normalizedKey] = answer
+  })
+
+  const rawRiskFactors = Array.isArray(clinical.risk_factors) ? clinical.risk_factors : []
+  const riskFactors = rawRiskFactors
+    .filter((factor): factor is string => typeof factor === "string")
+    .map((factor) => normalizeRiskFactorKey(factor))
+
+  const rawPhysicalSigns = Array.isArray(clinical.physical_signs) ? clinical.physical_signs : []
+  const physicalSigns = rawPhysicalSigns
+    .filter((sign): sign is string => typeof sign === "string")
+    .map((sign) => normalizePhysicalSign(sign))
+
+  const summaryEn = localizedSummary.en || existing?.medGemmaReasoning
+  const summaryHi = localizedSummary.hi || existing?.medGemmaReasoningI18n?.hi
+
+  return {
+    id: patientId,
+    name: typeof demographics.name === "string" ? demographics.name : existing?.name || "Unknown",
+    nameHi: existing?.nameHi || (typeof demographics.name === "string" ? demographics.name : existing?.name || "Unknown"),
+    age: typeof demographics.age === "number" ? demographics.age : existing?.age || 0,
+    gender:
+      demographics.gender === "male" || demographics.gender === "female" || demographics.gender === "other"
+        ? demographics.gender
+        : existing?.gender || "other",
+    phone: typeof demographics.phone === "string" ? demographics.phone : existing?.phone || "",
+    address: typeof demographics.address === "string" ? demographics.address : existing?.address || "",
+    addressHi: existing?.addressHi || (typeof demographics.address === "string" ? demographics.address : existing?.address || ""),
+    pincode: typeof demographics.pincode === "string" ? demographics.pincode : existing?.pincode || "",
+    village: typeof demographics.village === "string" ? demographics.village : existing?.village || "",
+    villageHi: existing?.villageHi || (typeof demographics.village === "string" ? demographics.village : existing?.village || ""),
+    riskScore: Number(riskScore),
+    riskLevel,
+    status: mapStatusFromApi(typeof status.triage_status === "string" ? status.triage_status : undefined),
+    distanceToPHC: existing?.distanceToPHC || 0,
+    needsSync: false,
+    testScheduled: Boolean(status.test_scheduled_date),
+    weight: typeof vitals.weight_kg === "number" ? vitals.weight_kg : existing?.weight,
+    height: typeof vitals.height_cm === "number" ? vitals.height_cm : existing?.height,
+    heartRateBpm: typeof clinical.heart_rate_bpm === "number" ? clinical.heart_rate_bpm : existing?.heartRateBpm,
+    bodyTemperature: typeof clinical.body_temperature_c === "number" ? clinical.body_temperature_c : existing?.bodyTemperature,
+    bodyTemperatureUnit: "C",
+    coughDuration: typeof clinical.cough_duration_days === "number" ? clinical.cough_duration_days : existing?.coughDuration,
+    coughNature: mapCoughNatureFromApi(typeof clinical.cough_nature === "string" ? clinical.cough_nature : undefined) || existing?.coughNature,
+    feverHistory: mapFeverFromApi(typeof clinical.fever_history === "string" ? clinical.fever_history : undefined) || existing?.feverHistory,
+    nightSweats:
+      mapRiskAnswerFromApi(typeof clinical.night_sweats === "string" ? clinical.night_sweats : undefined) ||
+      riskFactorAnswers.nightSweats ||
+      existing?.nightSweats,
+    weightLoss:
+      mapRiskAnswerFromApi(typeof clinical.weight_loss === "string" ? clinical.weight_loss : undefined) ||
+      riskFactorAnswers.weightLoss ||
+      existing?.weightLoss,
+    physicalSigns: physicalSigns.length > 0 ? physicalSigns : existing?.physicalSigns,
+    riskFactors: riskFactors.length > 0 ? riskFactors : existing?.riskFactors,
+    riskFactorAnswers: Object.keys(riskFactorAnswers).length > 0 ? riskFactorAnswers : existing?.riskFactorAnswers,
+    otherObservations:
+      typeof clinical.other_observations === "string"
+        ? clinical.other_observations
+        : existing?.otherObservations,
+    hearAudioScore: typeof ai.hear_score === "number" ? ai.hear_score : existing?.hearAudioScore,
+    medGemmaReasoning: summaryEn,
+    medGemmaReasoningI18n: summaryEn || summaryHi ? { en: summaryEn, hi: summaryHi } : existing?.medGemmaReasoningI18n,
+    createdAt: toDateOnly(typeof data.created_at_offline === "string" ? data.created_at_offline : existing?.createdAt),
+    collectionDate: toDateOnly(typeof data.created_at_offline === "string" ? data.created_at_offline : existing?.collectionDate),
+    scheduledTestDate: typeof status.test_scheduled_date === "string" ? status.test_scheduled_date : existing?.scheduledTestDate,
+    sampleId: typeof data.sample_id === "string" ? data.sample_id : existing?.sampleId,
+    latitude: typeof gps.lat === "number" ? gps.lat : existing?.latitude,
+    longitude: typeof gps.lng === "number" ? gps.lng : existing?.longitude,
+    aadhar: existing?.aadhar,
+  }
+}
+
+async function refreshLocalPatientsFromFirestore(
+  ashaWorkerId: string,
+  localPatients: Patient[]
+): Promise<Patient[] | null> {
+  try {
+    const existingById = new Map(localPatients.map((p) => [p.id, p]))
+    const snap = await getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId)))
+    if (snap.empty) return null
+
+    const remote = snap.docs.map((docSnap) =>
+      mapFirestorePatientToLocal(docSnap.id, docSnap.data() as Record<string, unknown>, existingById.get(docSnap.id))
+    )
+    const remoteIds = new Set(remote.map((p) => p.id))
+    const unsyncedLocalOnly = localPatients.filter((p) => p.needsSync && !remoteIds.has(p.id))
+    const merged = [...remote, ...unsyncedLocalOnly]
+    merged.sort((a, b) => {
+      const aTime = new Date(a.collectionDate || a.createdAt).getTime()
+      const bTime = new Date(b.collectionDate || b.createdAt).getTime()
+      return bTime - aTime
+    })
+    return merged
+  } catch (error) {
+    console.warn("Could not refresh patients from Firestore", error)
+    return null
   }
 }
 
@@ -378,6 +598,12 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
     }
 
     await syncUploads(currentUser.uid)
+
+    const localAfterSync = await getAllPatients()
+    const refreshed = await refreshLocalPatientsFromFirestore(currentUser.uid, localAfterSync)
+    if (refreshed && refreshed.length > 0) {
+      await savePatients(refreshed)
+    }
 
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("sync:complete"))

@@ -123,6 +123,14 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
     if (answer === "dontKnow") return t.dontKnow
     return t.preferNotToSay
   }
+
+  const getLocalizedReasoning = (p: Patient) => {
+    const i18n = p.medGemmaReasoningI18n
+    if (language === "hi") {
+      return i18n?.hi || i18n?.en || p.medGemmaReasoning || ""
+    }
+    return i18n?.en || p.medGemmaReasoning || i18n?.hi || ""
+  }
   
   const stages = [
     { key: "collected", label: t.collected, help: t.collectedHelp, done: true },
@@ -131,7 +139,7 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
       key: "ai",
       label: t.aiAnalysisDone,
       help: t.aiAnalysisDoneHelp,
-      done: Boolean(patient.medGemmaReasoning || patient.hearAudioScore),
+      done: Boolean(patient.medGemmaReasoning || patient.medGemmaReasoningI18n?.en || patient.medGemmaReasoningI18n?.hi || patient.hearAudioScore),
     },
     {
       key: "doctor",
@@ -421,7 +429,7 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
               </CardHeader>
               <CardContent>
                 <p className="text-sm leading-relaxed text-foreground bg-muted/50 p-3 rounded-lg border">
-                  {patient.medGemmaReasoning || (language === "en"
+                  {getLocalizedReasoning(patient) || (language === "en"
                     ? "No AI analysis available for this patient."
                     : "इस मरीज के लिए कोई एआई विश्लेषण उपलब्ध नहीं है।")}
                 </p>

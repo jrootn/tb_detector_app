@@ -249,7 +249,7 @@ export function DashboardScreen({
       {/* Main Content */}
       <main className="flex-1 p-4 pb-24 space-y-4">
         {/* Stats Cards */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Card
             className="cursor-pointer hover:shadow-md transition-shadow border-l-4 border-l-red-500"
             onClick={onViewPriority}
@@ -340,7 +340,7 @@ export function DashboardScreen({
               </div>
               
               {/* Date Filter */}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <CalendarDays className="h-4 w-4 text-muted-foreground" />
                 <Label htmlFor="dateFilter" className="text-sm font-medium whitespace-nowrap">
                   {t.filterByDate}:
@@ -350,7 +350,7 @@ export function DashboardScreen({
                   type="date"
                   value={dateFilter}
                   onChange={(e) => setDateFilter(e.target.value)}
-                  className="h-8 w-auto text-sm"
+                  className="h-8 w-full text-sm sm:w-auto"
                 />
                 {dateFilter && (
                   <Button
@@ -366,7 +366,35 @@ export function DashboardScreen({
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
+            <div className="space-y-2 p-3 md:hidden">
+              {filteredPatients.map((patient) => (
+                <button
+                  key={patient.id}
+                  type="button"
+                  className="w-full rounded-lg border bg-background p-3 text-left shadow-sm transition-colors hover:bg-muted/40"
+                  onClick={() => onViewPatient(patient)}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-medium">{language === "en" ? patient.name : patient.nameHi}</div>
+                      <div className="text-xs text-muted-foreground">{patient.sampleId || "-"}</div>
+                    </div>
+                    <Badge className={getRiskBadgeStyle(patient.riskLevel)}>{getRiskLabel(patient.riskLevel)}</Badge>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                    <div>{language === "en" ? patient.village : patient.villageHi}</div>
+                    <div className="text-right">{new Date(patient.collectionDate).toLocaleDateString(language === "en" ? "en-IN" : "hi-IN")}</div>
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">{getStatusLabel(patient.status)}</div>
+                </button>
+              ))}
+              {filteredPatients.length === 0 && (
+                <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  {language === "en" ? "No patients found" : "कोई मरीज़ नहीं मिला"}
+                </div>
+              )}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <Table>
                 <TableHeader>
                   <TableRow>

@@ -33,12 +33,13 @@ export function AppShell({
   initialAshaName = "",
   onLogout,
 }: AppShellProps) {
+  const enableMockSeed = process.env.NEXT_PUBLIC_ENABLE_MOCK_SEED === "1"
   const [currentScreen, setCurrentScreen] = useState<Screen>(initialScreen)
   const [isOnline, setIsOnline] = useState(true)
   const [ashaId, setAshaId] = useState(initialAshaId)
   const [ashaName, setAshaName] = useState(initialAshaName)
   const [pendingUploads, setPendingUploads] = useState(0)
-  const [patients, setPatients] = useState<Patient[]>(mockPatients)
+  const [patients, setPatients] = useState<Patient[]>([])
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
   const [dbReady, setDbReady] = useState(false)
   const [gpsLocation, setGpsLocation] = useState<GPSLocation>({
@@ -104,12 +105,14 @@ export function AppShell({
     }
   }, [])
 
-  // Load patients from IndexedDB (seed with mock data once)
+  // Load patients from IndexedDB
   useEffect(() => {
     let isMounted = true
     const loadPatients = async () => {
       try {
-        await seedPatientsIfEmpty(mockPatients)
+        if (enableMockSeed) {
+          await seedPatientsIfEmpty(mockPatients)
+        }
         const stored = await getAllPatients()
         if (isMounted && stored.length > 0) {
           setPatients(stored)
@@ -128,7 +131,7 @@ export function AppShell({
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [enableMockSeed])
 
   // Refresh from IndexedDB after sync completes
   useEffect(() => {

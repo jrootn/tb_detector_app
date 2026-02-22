@@ -43,6 +43,8 @@ db = firestore.client()
 UPLOAD_DUMMY_MEDIA = os.environ.get("UPLOAD_DUMMY_MEDIA", "1") == "1"
 STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET") or os.environ.get("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET")
 PATIENT_COUNT = int(os.environ.get("PATIENT_COUNT", "120"))
+INCLUDE_DUMMY_AI = os.environ.get("INCLUDE_DUMMY_AI", "0") == "1"
+INCLUDE_WORKFLOW_EVENTS = os.environ.get("INCLUDE_WORKFLOW_EVENTS", "0") == "1"
 
 
 def get_storage_bucket():
@@ -315,11 +317,14 @@ def generate_summary(risk_score: float, triage_status: str) -> str:
 
 
 def make_workflow_events(created_at: str, status: str) -> List[Dict]:
+    if not INCLUDE_WORKFLOW_EVENTS:
+        return []
     events = [
         {"code": "COLLECTED", "label": "Patient screened by ASHA", "at": created_at},
         {"code": "SYNCED", "label": "Record synced to cloud", "at": _utc_now()},
-        {"code": "AI_ANALYSIS_DONE", "label": "AI triage summary generated", "at": _utc_now()},
     ]
+    if INCLUDE_DUMMY_AI:
+        events.append({"code": "AI_ANALYSIS_DONE", "label": "AI triage summary generated", "at": _utc_now()})
     if status in {"AI_TRIAGED", "TEST_QUEUED", "LAB_DONE", "DOCTOR_FINALIZED", "ASHA_ACTION_IN_PROGRESS", "CLOSED"}:
         events.append({"code": "TEST_QUEUED", "label": "Diagnostic testing queue created", "at": _utc_now()})
     if status in {"LAB_DONE", "DOCTOR_FINALIZED", "ASHA_ACTION_IN_PROGRESS", "CLOSED"}:
@@ -399,7 +404,7 @@ def build_patient(
         k=1,
     )[0]
     risk_score = calculate_risk_score(symptoms, risk_factors_positive)
-    ai_rank_score = round(max(0.0, min(100.0, risk_score * 10 + random.uniform(-4.0, 4.0))), 2)
+    ai_rank_score = round(max(0.0, min(100.0, risk_score * 10 + random.uniform(-4.0, 4.0))), 2) if INCLUDE_DUMMY_AI else None
 
     created_at = _random_date_within(25)
 
@@ -413,7 +418,7 @@ def build_patient(
         report_path = f"lab_results/{lab_uid}/{patient_local_id}/report-{uuid.uuid4().hex}.pdf"
         report_uri = upload_blob(bucket, report_path, generate_pdf_bytes(), "application/pdf")
 
-    return {
+    patient = {
         "patient_local_id": patient_local_id,
         "device_id": f"device-{random.randint(100, 999)}",
         "asha_id": asha_uid,
@@ -469,24 +474,8 @@ def build_patient(
                 "uploaded_at": _utc_now(),
             }
         ],
-        "ai": {
-            "hear_embedding_id": str(uuid.uuid4()),
-            "hear_score": round(random.uniform(0.2, 0.95), 2),
-            "medgemini_summary": generate_summary(risk_score, triage_status),
-            "risk_score": risk_score,
-            "risk_level": "HIGH" if risk_score >= 7.0 else "MEDIUM" if risk_score >= 4.0 else "LOW",
-        },
-        "rank": {
-            "ai_rank_score": ai_rank_score,
-            "doctor_rank_override": None,
-            "effective_rank": ai_rank_score,
-            "rank_updated_at": _utc_now(),
-        },
-        "doctor_priority": random.random() < 0.12,
-        "doctor_rank": int(ai_rank_score),
         "status": {
             "triage_status": triage_status,
-            "workflow_events": make_workflow_events(created_at, triage_status),
             "test_scheduled_date": None,
             "doctor_notes": None,
         },
@@ -498,6 +487,28 @@ def build_patient(
         if report_uri
         else None,
     }
+    workflow_events = make_workflow_events(created_at, triage_status)
+    if workflow_events:
+        patient["status"]["workflow_events"] = workflow_events
+
+    if INCLUDE_DUMMY_AI and ai_rank_score is not None:
+        patient["ai"] = {
+            "hear_embedding_id": str(uuid.uuid4()),
+            "hear_score": round(random.uniform(0.2, 0.95), 2),
+            "medgemini_summary": generate_summary(risk_score, triage_status),
+            "risk_score": risk_score,
+            "risk_level": "HIGH" if risk_score >= 7.0 else "MEDIUM" if risk_score >= 4.0 else "LOW",
+        }
+        patient["rank"] = {
+            "ai_rank_score": ai_rank_score,
+            "doctor_rank_override": None,
+            "effective_rank": ai_rank_score,
+            "rank_updated_at": _utc_now(),
+        }
+        patient["doctor_priority"] = random.random() < 0.12
+        patient["doctor_rank"] = int(ai_rank_score)
+
+    return patient
 
 
 def clear_collection(collection_name: str) -> None:

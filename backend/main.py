@@ -36,6 +36,7 @@ db = firestore.client()
 _user_cache: Dict[str, Dict[str, Any]] = {}
 _doctor_by_facility_cache: Dict[str, Optional[str]] = {}
 _lab_by_facility_cache: Dict[str, Optional[str]] = {}
+ENABLE_DUMMY_AI = os.environ.get("ENABLE_DUMMY_AI", "0") == "1"
 
 
 def get_user_doc(uid: Optional[str]) -> Dict[str, Any]:
@@ -276,21 +277,21 @@ async def sync_patients(request: Request, _: Dict[str, Any] = Depends(verify_fir
         doc_snapshot = doc_ref.get()
         exists = doc_snapshot.exists
 
-        hear_score = get_hear_score(record.audio)
-        risk_score = round(min(10.0, hear_score * 10), 1)
-        triage_status = record.status.triage_status if record.status else None
-        ai_result = AIResult(
-            hear_embedding_id=str(uuid.uuid4()),
-            hear_score=hear_score,
-            medgemini_summary=get_medgemini_summary(risk_score, triage_status),
-            risk_score=risk_score,
-            risk_level=get_risk_level(risk_score),
-        )
-
         record.synced_at = _utc_now()
         if not record.asha_id:
             record.asha_id = record.asha_worker_id
-        record.ai = ai_result
+        if ENABLE_DUMMY_AI:
+            hear_score = get_hear_score(record.audio)
+            risk_score = round(min(10.0, hear_score * 10), 1)
+            triage_status = record.status.triage_status if record.status else None
+            ai_result = AIResult(
+                hear_embedding_id=str(uuid.uuid4()),
+                hear_score=hear_score,
+                medgemini_summary=get_medgemini_summary(risk_score, triage_status),
+                risk_score=risk_score,
+                risk_level=get_risk_level(risk_score),
+            )
+            record.ai = ai_result
 
         asha_doc = get_user_doc(record.asha_id or record.asha_worker_id)
         facility_id = asha_doc.get("facility_id")

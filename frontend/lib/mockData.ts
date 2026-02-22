@@ -43,6 +43,10 @@ export interface Patient {
   // AI Analysis
   hearAudioScore?: number
   medGemmaReasoning?: string
+  medGemmaReasoningI18n?: {
+    en?: string
+    hi?: string
+  }
   
   // Dates
   createdAt: string
