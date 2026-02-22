@@ -124,9 +124,14 @@ class AudioMeta(BaseModel):
 
 
 class AIResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     hear_embedding_id: Optional[str] = None
     hear_score: Optional[float] = None
     medgemini_summary: Optional[str] = None
+    medgemini_summary_en: Optional[str] = None
+    medgemini_summary_hi: Optional[str] = None
+    medgemini_summary_i18n: Optional[Dict[str, str]] = None
     risk_score: Optional[float] = None
     risk_level: Optional[str] = None
 
