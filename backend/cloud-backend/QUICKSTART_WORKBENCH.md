@@ -88,8 +88,6 @@ gcloud tasks queues describe tb-inference-queue --location "$REGION"
 
 ## Notes
 
-- Current `inference_pipeline.py` is a production-safe fallback pipeline (deterministic, no dummy random text), so deployment works immediately.
-- Replace internals later with your full HEAR + classical + MedGemma logic in:
-  - `inference-service/app/models.py`
-  - `inference-service/app/inference_pipeline.py`
+- The service now runs with the real HEAR + classical + MedGemma pipeline.
+- Make sure model files exist in GCS at the configured prefixes (or local mounted paths), otherwise startup will fail fast.
 - Scale-to-zero is already configured (`--min-instances=0`).

@@ -24,6 +24,11 @@ for v in "${required_vars[@]}"; do
   fi
 done
 
+INFERENCE_CPU="${INFERENCE_CPU:-4}"
+INFERENCE_MEMORY="${INFERENCE_MEMORY:-16Gi}"
+INFERENCE_MAX_INSTANCES="${INFERENCE_MAX_INSTANCES:-3}"
+INFERENCE_TIMEOUT="${INFERENCE_TIMEOUT:-3600}"
+
 if ! command -v gcloud >/dev/null 2>&1; then
   echo "gcloud not found"
   exit 1
@@ -116,12 +121,12 @@ gcloud run deploy "$RUN_SERVICE" \
   --service-account="${SA_INFERENCE}@${PROJECT_ID}.iam.gserviceaccount.com" \
   --no-allow-unauthenticated \
   --ingress=internal-and-cloud-load-balancing \
-  --timeout=3600 \
+  --timeout="$INFERENCE_TIMEOUT" \
   --concurrency=1 \
   --min-instances=0 \
-  --max-instances=3 \
-  --cpu=4 \
-  --memory=8Gi \
+  --max-instances="$INFERENCE_MAX_INSTANCES" \
+  --cpu="$INFERENCE_CPU" \
+  --memory="$INFERENCE_MEMORY" \
   --set-env-vars="PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,STORAGE_BUCKET=$STORAGE_BUCKET,TARGET_MODEL_VERSION=$TARGET_MODEL_VERSION,MODEL_VERSION=$MODEL_VERSION,LOCAL_MEDGEMMA=$LOCAL_MEDGEMMA,LOCAL_CLASSICAL=$LOCAL_CLASSICAL,LOCAL_HEAR=$LOCAL_HEAR,SYNC_MODELS_ON_STARTUP=$SYNC_MODELS_ON_STARTUP,GCS_MODEL_BUCKET=$GCS_MODEL_BUCKET,GCS_MEDGEMMA_PREFIX=$GCS_MEDGEMMA_PREFIX,GCS_CLASSICAL_PREFIX=$GCS_CLASSICAL_PREFIX,GCS_HEAR_PREFIX=$GCS_HEAR_PREFIX" >/dev/null
 
 SERVICE_URL=$(gcloud run services describe "$RUN_SERVICE" --region "$REGION" --format='value(status.url)')

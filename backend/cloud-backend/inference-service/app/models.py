@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -12,6 +13,13 @@ from .logging_utils import get_logger, log_event
 
 
 logger = get_logger("tb-inference-models")
+
+
+# Set memory-related runtime flags before importing TensorFlow/Keras.
+os.environ.setdefault("KERAS_BACKEND", "jax")
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 
 @dataclass
@@ -82,6 +90,12 @@ def _safe_joblib_load(path: Path) -> Optional[Any]:
 def get_models() -> ModelBundle:
     _sync_model_artifacts()
 
+    import keras
+    import keras_hub
+    import tensorflow as tf
+
+    keras.config.set_floatx("bfloat16")
+
     bundle = ModelBundle()
     classical_dir = Path(settings.local_classical)
 
@@ -90,13 +104,42 @@ def get_models() -> ModelBundle:
     bundle.clf_clinical = _safe_joblib_load(classical_dir / "final_clinical_expert.pkl")
     bundle.cal_supervisor = _safe_joblib_load(classical_dir / "final_calibrated_supervisor.pkl")
 
-    # Optional HEAR + MedGemma loading can be added here once artifacts and memory profile are finalized.
-    # Keep service up even when one component is unavailable; pipeline can fallback.
-    bundle.loaded = any(
-        model is not None
-        for model in [bundle.meta_prep, bundle.clf_audio, bundle.clf_clinical, bundle.cal_supervisor]
-    )
+    hear_path = Path(settings.local_hear)
+    if hear_path.exists():
+        try:
+            hear_model = tf.saved_model.load(str(hear_path))
+            bundle.hear_serving = hear_model.signatures["serving_default"]
+        except Exception as exc:
+            log_event(logger, "model_load_warning", model="hear_serving", error=str(exc))
 
+    medgemma_path = Path(settings.local_medgemma)
+    if medgemma_path.exists():
+        try:
+            bundle.medgemma = keras_hub.models.CausalLM.from_preset(str(medgemma_path), dtype="bfloat16")
+            bundle.medgemma.compile(sampler=keras_hub.samplers.TopPSampler(p=0.9, temperature=0.2))
+            # Warmup call
+            _ = bundle.medgemma.generate("Warmup prompt.", max_length=10)
+        except Exception as exc:
+            log_event(logger, "model_load_warning", model="medgemma", error=str(exc))
+
+    missing = []
+    if bundle.meta_prep is None:
+        missing.append("meta_preprocessor")
+    if bundle.clf_audio is None:
+        missing.append("audio_expert")
+    if bundle.clf_clinical is None:
+        missing.append("clinical_expert")
+    if bundle.cal_supervisor is None:
+        missing.append("calibrated_supervisor")
+    if bundle.hear_serving is None:
+        missing.append("hear_serving")
+    if bundle.medgemma is None:
+        missing.append("medgemma")
+
+    if missing:
+        raise RuntimeError(f"Required model components missing or failed to load: {', '.join(missing)}")
+
+    bundle.loaded = True
     log_event(
         logger,
         "model_bundle_ready",

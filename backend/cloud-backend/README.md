@@ -37,5 +37,5 @@ Or use the Workbench quickstart:
 
 ## Notes
 
-- `inference_pipeline.py` currently includes a deterministic clinical/audio fallback pipeline so the service runs end-to-end now.
-- Replace fallback logic with your final HEAR + classical + MedGemma implementation in `app/inference_pipeline.py` and `app/models.py` when ready.
+- The inference service is wired for the real HEAR + classical + MedGemma pipeline.
+- Ensure model artifacts exist in your configured GCS prefixes (or are baked into image/local paths) before deployment.
