@@ -54,6 +54,16 @@ def _find_bucket_audio(storage_client: storage.Client, bucket: str, prefixes: Li
     return None
 
 
+def _all_bucket_audio(storage_client: storage.Client, bucket: str, prefix: str) -> List[str]:
+    return sorted(
+        [
+            b.name
+            for b in storage_client.list_blobs(bucket, prefix=prefix)
+            if not b.name.endswith("/") and b.name.lower().endswith(AUDIO_EXTENSIONS)
+        ]
+    )
+
+
 def _candidate_prefixes(doc: Dict[str, Any]) -> List[str]:
     patient_local_id = str(doc.get("patient_local_id") or "").strip()
     asha_id = str(doc.get("asha_id") or "").strip()
@@ -69,9 +79,22 @@ def _candidate_prefixes(doc: Dict[str, Any]) -> List[str]:
     return prefixes
 
 
-def run(bucket_name: str, apply: bool, limit: Optional[int]) -> None:
+def run(
+    bucket_name: str,
+    apply: bool,
+    limit: Optional[int],
+    fallback_any_audio: bool,
+    fallback_prefix: str,
+) -> None:
     db, storage_client, bucket = init_clients(bucket_name)
-    docs = db.collection("patients").stream()
+    docs = list(db.collection("patients").stream())
+    docs.sort(key=lambda s: s.id)
+
+    fallback_pool: List[str] = []
+    fallback_idx = 0
+    used_paths = set()
+    if fallback_any_audio:
+        fallback_pool = _all_bucket_audio(storage_client, bucket, fallback_prefix)
 
     scanned = 0
     updated = 0
@@ -97,11 +120,18 @@ def run(bucket_name: str, apply: bool, limit: Optional[int]) -> None:
             continue
 
         blob_path = _find_bucket_audio(storage_client, bucket, _candidate_prefixes(data))
+        if not blob_path and fallback_any_audio:
+            while fallback_idx < len(fallback_pool) and fallback_pool[fallback_idx] in used_paths:
+                fallback_idx += 1
+            if fallback_idx < len(fallback_pool):
+                blob_path = fallback_pool[fallback_idx]
+                fallback_idx += 1
         if not blob_path:
             skipped_no_bucket_match += 1
             if len(examples) < 10:
                 examples.append(f"{snap.id}: no_blob")
             continue
+        used_paths.add(blob_path)
 
         updated_audio = []
         patched_any = False
@@ -143,6 +173,22 @@ if __name__ == "__main__":
     parser.add_argument("--bucket", default="medgemini-tb-triage.firebasestorage.app")
     parser.add_argument("--apply", action="store_true", help="Write updates. Without this flag, dry-run only.")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--fallback-any-audio",
+        action="store_true",
+        help="If no direct patient match is found, assign next available audio from bucket prefix.",
+    )
+    parser.add_argument(
+        "--fallback-prefix",
+        default="asha_uploads/",
+        help="Bucket prefix for fallback audio pool (default: asha_uploads/).",
+    )
     args = parser.parse_args()
 
-    run(bucket_name=args.bucket, apply=args.apply, limit=args.limit)
+    run(
+        bucket_name=args.bucket,
+        apply=args.apply,
+        limit=args.limit,
+        fallback_any_audio=args.fallback_any_audio,
+        fallback_prefix=args.fallback_prefix,
+    )
