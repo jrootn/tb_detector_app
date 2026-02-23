@@ -28,6 +28,19 @@ INFERENCE_CPU="${INFERENCE_CPU:-8}"
 INFERENCE_MEMORY="${INFERENCE_MEMORY:-32Gi}"
 INFERENCE_MAX_INSTANCES="${INFERENCE_MAX_INSTANCES:-3}"
 INFERENCE_TIMEOUT="${INFERENCE_TIMEOUT:-3600}"
+USE_GPU="${USE_GPU:-1}"
+GPU_COUNT="${GPU_COUNT:-1}"
+GPU_TYPE="${GPU_TYPE:-nvidia-l4}"
+GPU_ZONAL_REDUNDANCY="${GPU_ZONAL_REDUNDANCY:-0}"
+
+LOCAL_MEDGEMMA="${LOCAL_MEDGEMMA:-/models/medgemma}"
+LOCAL_CLASSICAL="${LOCAL_CLASSICAL:-/models/classical}"
+LOCAL_HEAR="${LOCAL_HEAR:-/models/hear}"
+SYNC_MODELS_ON_STARTUP="${SYNC_MODELS_ON_STARTUP:-1}"
+GCS_MODEL_BUCKET="${GCS_MODEL_BUCKET:-$STORAGE_BUCKET}"
+GCS_MEDGEMMA_PREFIX="${GCS_MEDGEMMA_PREFIX:-models/medgemma}"
+GCS_CLASSICAL_PREFIX="${GCS_CLASSICAL_PREFIX:-models/classical}"
+GCS_HEAR_PREFIX="${GCS_HEAR_PREFIX:-models/Hear_model/hear_model_offline}"
 
 if ! command -v gcloud >/dev/null 2>&1; then
   echo "gcloud not found"
@@ -115,19 +128,32 @@ echo "==> Building inference image: $IMAGE"
 gcloud builds submit "$SCRIPT_DIR/inference-service" --tag "$IMAGE" >/dev/null
 
 echo "==> Deploying Cloud Run service: $RUN_SERVICE"
-gcloud run deploy "$RUN_SERVICE" \
-  --image="$IMAGE" \
-  --region="$REGION" \
-  --service-account="${SA_INFERENCE}@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --no-allow-unauthenticated \
-  --ingress=internal-and-cloud-load-balancing \
-  --timeout="$INFERENCE_TIMEOUT" \
-  --concurrency=1 \
-  --min-instances=0 \
-  --max-instances="$INFERENCE_MAX_INSTANCES" \
-  --cpu="$INFERENCE_CPU" \
-  --memory="$INFERENCE_MEMORY" \
-  --set-env-vars="PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,STORAGE_BUCKET=$STORAGE_BUCKET,TARGET_MODEL_VERSION=$TARGET_MODEL_VERSION,MODEL_VERSION=$MODEL_VERSION,LOCAL_MEDGEMMA=$LOCAL_MEDGEMMA,LOCAL_CLASSICAL=$LOCAL_CLASSICAL,LOCAL_HEAR=$LOCAL_HEAR,SYNC_MODELS_ON_STARTUP=$SYNC_MODELS_ON_STARTUP,GCS_MODEL_BUCKET=$GCS_MODEL_BUCKET,GCS_MEDGEMMA_PREFIX=$GCS_MEDGEMMA_PREFIX,GCS_CLASSICAL_PREFIX=$GCS_CLASSICAL_PREFIX,GCS_HEAR_PREFIX=$GCS_HEAR_PREFIX" >/dev/null
+deploy_cmd=(
+  gcloud run deploy "$RUN_SERVICE"
+  --image="$IMAGE"
+  --region="$REGION"
+  --service-account="${SA_INFERENCE}@${PROJECT_ID}.iam.gserviceaccount.com"
+  --no-allow-unauthenticated
+  --ingress=internal-and-cloud-load-balancing
+  --timeout="$INFERENCE_TIMEOUT"
+  --concurrency=1
+  --min-instances=0
+  --max-instances="$INFERENCE_MAX_INSTANCES"
+  --cpu="$INFERENCE_CPU"
+  --memory="$INFERENCE_MEMORY"
+  --set-env-vars="PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,STORAGE_BUCKET=$STORAGE_BUCKET,TARGET_MODEL_VERSION=$TARGET_MODEL_VERSION,MODEL_VERSION=$MODEL_VERSION,LOCAL_MEDGEMMA=$LOCAL_MEDGEMMA,LOCAL_CLASSICAL=$LOCAL_CLASSICAL,LOCAL_HEAR=$LOCAL_HEAR,SYNC_MODELS_ON_STARTUP=$SYNC_MODELS_ON_STARTUP,GCS_MODEL_BUCKET=$GCS_MODEL_BUCKET,GCS_MEDGEMMA_PREFIX=$GCS_MEDGEMMA_PREFIX,GCS_CLASSICAL_PREFIX=$GCS_CLASSICAL_PREFIX,GCS_HEAR_PREFIX=$GCS_HEAR_PREFIX"
+)
+
+if [[ "$USE_GPU" == "1" ]]; then
+  deploy_cmd+=(--gpu="$GPU_COUNT" --gpu-type="$GPU_TYPE")
+  if [[ "$GPU_ZONAL_REDUNDANCY" == "1" ]]; then
+    deploy_cmd+=(--gpu-zonal-redundancy)
+  else
+    deploy_cmd+=(--no-gpu-zonal-redundancy)
+  fi
+fi
+
+"${deploy_cmd[@]}" >/dev/null
 
 SERVICE_URL=$(gcloud run services describe "$RUN_SERVICE" --region "$REGION" --format='value(status.url)')
 INFERENCE_URL="$SERVICE_URL/internal/infer"
