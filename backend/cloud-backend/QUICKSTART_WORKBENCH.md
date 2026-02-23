@@ -14,7 +14,7 @@ Frontend can continue as-is.
 
 - `gcloud` installed and authenticated.
 - `node` + `npm` installed.
-- `firebase-tools` installed (`npm i -g firebase-tools`) and logged in (`firebase login`).
+- Firebase authenticated (`firebase login` or `npx firebase-tools login`).
 - You have Firebase project + Firestore + Storage already enabled.
 
 ## 1) Fill deployment env
@@ -57,10 +57,14 @@ This script will:
 ### Check function exists
 
 ```bash
-firebase functions:list --project "$PROJECT_ID"
+firebase functions:list --project "$PROJECT_ID" || npx firebase-tools functions:list --project "$PROJECT_ID"
 ```
 
 You should see: `onPatientWriteEnqueueInference`.
+If deploying only this function for this repository codebase, use:
+`--only functions:tb-inference-triggers:onPatientWriteEnqueueInference`.
+If you maintain `functions/.env` manually, do not use reserved keys like
+`GCLOUD_PROJECT` or `FUNCTION_REGION`; use `APP_PROJECT_ID` and `APP_FUNCTION_REGION`.
 
 ### Check Cloud Run health
 
@@ -92,8 +96,8 @@ If you already have patient docs and want to trigger inference for all eligible 
 
 ```bash
 cd /home/jroot/TB-medgemma
-python backend/cloud-backend/backfill_inference_requests.py --limit 500   # dry-run
-python backend/cloud-backend/backfill_inference_requests.py --apply        # execute
+python backend/cloud-backend/backfill_inference_requests.py --limit 500 --target-model-version medgemma-4b-it-v1   # dry-run
+python backend/cloud-backend/backfill_inference_requests.py --apply --target-model-version medgemma-4b-it-v1        # execute
 ```
 
 Eligibility rule: the document must contain at least one `audio[]` item with `storage_path` or `storage_uri`.

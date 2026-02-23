@@ -7,7 +7,11 @@ function hasAudio(doc: AnyDoc): boolean {
   return audio.some((entry) => {
     if (!entry || typeof entry !== "object") return false;
     const e = entry as Record<string, unknown>;
-    return typeof e.storage_uri === "string" || typeof e.storage_path === "string";
+    const uri = e.storage_uri;
+    const path = e.storage_path;
+    const hasUri = typeof uri === "string" && uri.trim().length > 0;
+    const hasPath = typeof path === "string" && path.trim().length > 0;
+    return hasUri || hasPath;
   });
 }
 
@@ -15,7 +19,7 @@ function triageReady(doc: AnyDoc): boolean {
   const status = doc?.status;
   if (!status || typeof status !== "object") return false;
   const triage = (status as Record<string, unknown>).triage_status;
-  return typeof triage === "string" && triage !== "DRAFT";
+  return typeof triage === "string" && triage.trim().length > 0 && triage !== "DRAFT";
 }
 
 function stripAi(doc: AnyDoc): AnyDoc {

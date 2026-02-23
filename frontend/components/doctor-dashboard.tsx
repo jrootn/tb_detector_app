@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
 import { addDoc, collection, updateDoc, doc, onSnapshot, query, where } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { getAiSummaryText, normalizeAiRiskScore } from "@/lib/ai"
 import {
   isQueueStatus,
   isRankEditableStatus,
@@ -33,7 +34,13 @@ interface PatientRecord {
   id: string
   demographics?: { name?: string }
   gps?: { lat?: number; lng?: number }
-  ai?: { risk_score?: number; medgemini_summary?: string }
+  ai?: {
+    risk_score?: number
+    medgemini_summary?: string | { en?: string; hi?: string }
+    medgemini_summary_en?: string
+    medgemini_summary_hi?: string
+    medgemini_summary_i18n?: { en?: string; hi?: string }
+  }
   doctor_priority?: boolean
   doctor_rank?: number
   assigned_doctor_id?: string
@@ -51,6 +58,10 @@ interface DoctorDashboardProps {
 function normalizeName(name?: string) {
   if (!name) return "Unknown"
   return name.replace(/\s+\d+$/, "")
+}
+
+function getPatientRiskScore(patient: PatientRecord): number {
+  return normalizeAiRiskScore(patient.ai?.risk_score)
 }
 
 export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps) {
@@ -164,8 +175,8 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       } else if (aHasRank !== bHasRank) {
         return aHasRank ? -1 : 1
       }
-      const aScore = a.ai?.risk_score ?? 0
-      const bScore = b.ai?.risk_score ?? 0
+      const aScore = getPatientRiskScore(a)
+      const bScore = getPatientRiskScore(b)
       return bScore - aScore
     })
   }, [filtered])
@@ -285,7 +296,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   const riskBuckets = useMemo(() => {
     const buckets = { High: 0, Medium: 0, Low: 0 }
     analyticsPatients.forEach((p) => {
-      const score = p.ai?.risk_score ?? 0
+      const score = getPatientRiskScore(p)
       if (score >= 7) buckets.High += 1
       else if (score >= 4) buckets.Medium += 1
       else buckets.Low += 1
@@ -294,12 +305,12 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   }, [analyticsPatients])
 
   const highRiskPatients = useMemo(() => {
-    return analyticsPatients.filter((p) => (p.ai?.risk_score ?? 0) >= 7)
+    return analyticsPatients.filter((p) => getPatientRiskScore(p) >= 7)
   }, [analyticsPatients])
 
   const csvRows = useMemo(() => {
     if (!csvOnlyHighRisk) return analyticsPatients
-    return analyticsPatients.filter((p) => (p.ai?.risk_score ?? 0) >= 7)
+    return analyticsPatients.filter((p) => getPatientRiskScore(p) >= 7)
   }, [analyticsPatients, csvOnlyHighRisk])
 
   const dateFilterLabel = useMemo(() => {
@@ -342,7 +353,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       const row: unknown[] = [
         normalizeName(p.demographics?.name),
         p.sample_id || "-",
-        p.ai?.risk_score ?? 0,
+        getPatientRiskScore(p).toFixed(2),
         triageStatusLabel(p.status?.triage_status),
         p.doctor_priority ? "urgent" : "normal",
         p.doctor_rank ?? 0,
@@ -351,7 +362,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
         row.push(p.gps?.lat ?? "", p.gps?.lng ?? "")
       }
       if (csvIncludeSummary) {
-        row.push(p.ai?.medgemini_summary || "")
+        row.push(getAiSummaryText(p.ai, "en") || "")
       }
       lines.push(row.map(csvEscape).join(","))
     })
@@ -484,8 +495,8 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                           <td className="p-2 font-semibold">{index + 1}</td>
                           <td className="p-2">{normalizeName(patient.demographics?.name)}</td>
                           <td className="p-2 text-muted-foreground">{patient.sample_id || "-"}</td>
-                          <td className={`p-2 font-medium ${(patient.ai?.risk_score ?? 0) >= 8 ? "text-red-600" : "text-emerald-600"}`}>
-                            {patient.ai?.risk_score ?? 0}
+                          <td className={`p-2 font-medium ${getPatientRiskScore(patient) >= 8 ? "text-red-600" : "text-emerald-600"}`}>
+                            {getPatientRiskScore(patient).toFixed(1)}
                           </td>
                           <td className="p-2">
                             <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(patient.status?.triage_status)}`}>
@@ -561,12 +572,12 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                 <>
                   <div className="text-base font-semibold">{normalizeName(selectedPatient.demographics?.name)}</div>
                   <div className="text-sm text-muted-foreground">Sample ID: {selectedPatient.sample_id || "-"}</div>
-                  <div className="text-sm">Risk Score: {selectedPatient.ai?.risk_score ?? 0}</div>
+                  <div className="text-sm">Risk Score: {getPatientRiskScore(selectedPatient).toFixed(1)}</div>
                   <div className="text-sm">
                     Status: {triageStatusLabel(selectedPatient.status?.triage_status)}
                   </div>
                   <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
-                    {selectedPatient.ai?.medgemini_summary || "No AI summary available."}
+                    {getAiSummaryText(selectedPatient.ai, "en") || "No AI summary available."}
                   </div>
                   {isQueueStatus(selectedPatient.status?.triage_status) ? (
                     <div className="flex flex-wrap gap-2">
@@ -796,7 +807,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                       <div>
                         <div className="text-sm font-medium">{normalizeName(p.demographics?.name)}</div>
                         <div className="text-xs text-muted-foreground">
-                          Sample: {p.sample_id || "-"} • Score: {p.ai?.risk_score ?? 0} • Status:{" "}
+                          Sample: {p.sample_id || "-"} • Score: {getPatientRiskScore(p).toFixed(1)} • Status:{" "}
                           {triageStatusLabel(p.status?.triage_status)}
                         </div>
                       </div>

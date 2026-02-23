@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation"
 import { onAuthStateChanged } from "firebase/auth"
 import { doc, getDoc } from "firebase/firestore"
 import { auth, db } from "@/lib/firebase"
+import { normalizeAiRiskScore } from "@/lib/ai"
 import { resolveStorageUrl } from "@/lib/storage-utils"
 import { triageStatusLabel } from "@/lib/triage-status"
 import { Button } from "@/components/ui/button"
@@ -83,7 +84,7 @@ export default function LabPatientPage() {
         <CardContent className="space-y-1 text-sm">
           <div>Sample ID: {patient.sample_id || "-"}</div>
           <div>Phone: {patient.demographics?.phone || "-"}</div>
-          <div>Risk Score: {patient.ai?.risk_score ?? 0}</div>
+          <div>Risk Score: {normalizeAiRiskScore(patient.ai?.risk_score).toFixed(1)}</div>
           <div>Status: {triageStatusLabel(patient.status?.triage_status)}</div>
           {reportUrl && (
             <a className="text-blue-600 underline" href={reportUrl} target="_blank" rel="noreferrer">

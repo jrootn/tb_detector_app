@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react"
 import L from "leaflet"
+import { normalizeAiRiskScore } from "@/lib/ai"
 
 interface DoctorHeatmapPatient {
   id: string
@@ -83,7 +84,7 @@ export default function DoctorHeatmap({
     patients
       .filter((p) => typeof p.gps?.lat === "number" && typeof p.gps?.lng === "number")
       .forEach((p) => {
-        const score = p.ai?.risk_score ?? 0
+        const score = normalizeAiRiskScore(p.ai?.risk_score)
         const safeName = escapeHtml(normalizeName(p.demographics?.name))
         const safeFacility = escapeHtml(p.facility_name || "-")
         const profileUrl = `${profileBasePath}/${encodeURIComponent(p.id)}`
@@ -117,7 +118,7 @@ export default function DoctorHeatmap({
             `<div style="font-size:12px;">
               <div><strong>${safeName}</strong></div>
               <div>Sample: ${p.sample_id || "-"}</div>
-              <div>Risk: ${score}</div>
+              <div>Risk: ${score.toFixed(1)}</div>
               ${showFacility ? `<div>Facility: ${safeFacility}</div>` : ""}
               <div style="margin-top:6px;">
                 <a href="${profileUrl}" style="color:#0f766e; font-weight:600; text-decoration:underline;">Open Profile</a>

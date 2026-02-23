@@ -1,6 +1,7 @@
 import { getAllPatients, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
 import type { Patient } from "@/lib/mockData"
 import { auth, db, storage } from "@/lib/firebase"
+import { normalizeAiRiskScore } from "@/lib/ai"
 import { doc, updateDoc, arrayUnion, setDoc, getDoc, collection, getDocs, query, where } from "firebase/firestore"
 import { ref, uploadBytes } from "firebase/storage"
 
@@ -379,12 +380,13 @@ function mapFirestorePatientToLocal(
   const status = (data.status || {}) as Record<string, unknown>
 
   const localizedSummary = parseLocalizedSummary(ai)
-  const riskScore =
+  const riskScoreRaw =
     typeof ai.risk_score === "number"
       ? ai.risk_score
       : typeof existing?.riskScore === "number"
       ? existing.riskScore
       : 0
+  const riskScore = normalizeAiRiskScore(riskScoreRaw, existing?.riskScore || 0)
   const riskLevelRaw = typeof ai.risk_level === "string" ? ai.risk_level.toUpperCase() : ""
   const riskLevel: Patient["riskLevel"] =
     riskLevelRaw === "HIGH" ? "high" : riskLevelRaw === "MEDIUM" ? "medium" : riskLevelRaw === "LOW" ? "low" : riskScore >= 7 ? "high" : riskScore >= 4 ? "medium" : "low"

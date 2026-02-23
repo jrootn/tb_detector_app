@@ -1,7 +1,5 @@
 import json
 import os
-import random
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -36,7 +34,6 @@ db = firestore.client()
 _user_cache: Dict[str, Dict[str, Any]] = {}
 _doctor_by_facility_cache: Dict[str, Optional[str]] = {}
 _lab_by_facility_cache: Dict[str, Optional[str]] = {}
-ENABLE_DUMMY_AI = os.environ.get("ENABLE_DUMMY_AI", "0") == "1"
 
 
 def get_user_doc(uid: Optional[str]) -> Dict[str, Any]:
@@ -169,41 +166,6 @@ class SyncBatch(BaseModel):
 
 
 # ----------------------
-# Mock AI functions
-# ----------------------
-
-def get_hear_score(_: Optional[List[AudioMeta]]) -> float:
-    return round(random.uniform(0.2, 0.95), 2)
-
-
-def get_medgemini_summary(risk_score: float, triage_status: Optional[str]) -> str:
-    if triage_status in {"AI_TRIAGED", "TEST_QUEUED"}:
-        return "AI triage completed. Keep this case in testing queue based on risk and capacity."
-    if triage_status == "LAB_DONE":
-        return "Lab result is ready. Doctor should finalize mandatory follow-up actions."
-    if triage_status == "DOCTOR_FINALIZED":
-        return "Doctor finalized action plan. ASHA should execute mandatory follow-up tasks."
-    if triage_status == "ASHA_ACTION_IN_PROGRESS":
-        return "ASHA follow-up is in progress. Track adherence and household screening."
-    if triage_status == "CLOSED":
-        return "Case workflow closed. Continue routine surveillance where needed."
-
-    if risk_score >= 8:
-        return "High TB suspicion. Prioritize this case in test queue and rapid review."
-    if risk_score >= 5:
-        return "Moderate TB risk. Keep in active testing queue and monitor."
-    return "Low TB risk. Monitor symptoms and advise follow-up if worsening."
-
-
-def get_risk_level(score: float) -> str:
-    if score >= 7.0:
-        return "HIGH"
-    if score >= 4.0:
-        return "MEDIUM"
-    return "LOW"
-
-
-# ----------------------
 # Auth dependency
 # ----------------------
 
@@ -285,19 +247,6 @@ async def sync_patients(request: Request, _: Dict[str, Any] = Depends(verify_fir
         record.synced_at = _utc_now()
         if not record.asha_id:
             record.asha_id = record.asha_worker_id
-        if ENABLE_DUMMY_AI:
-            hear_score = get_hear_score(record.audio)
-            risk_score = round(min(10.0, hear_score * 10), 1)
-            triage_status = record.status.triage_status if record.status else None
-            ai_result = AIResult(
-                hear_embedding_id=str(uuid.uuid4()),
-                hear_score=hear_score,
-                medgemini_summary=get_medgemini_summary(risk_score, triage_status),
-                risk_score=risk_score,
-                risk_level=get_risk_level(risk_score),
-            )
-            record.ai = ai_result
-
         asha_doc = get_user_doc(record.asha_id or record.asha_worker_id)
         facility_id = asha_doc.get("facility_id")
         tu_id = asha_doc.get("tu_id")

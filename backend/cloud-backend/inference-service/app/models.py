@@ -104,6 +104,23 @@ def get_models() -> ModelBundle:
     bundle.clf_clinical = _safe_joblib_load(classical_dir / "final_clinical_expert.pkl")
     bundle.cal_supervisor = _safe_joblib_load(classical_dir / "final_calibrated_supervisor.pkl")
 
+    # Fail fast before loading heavier HEAR/LLM artifacts if classical models are unavailable.
+    missing_classical = []
+    if bundle.meta_prep is None:
+        missing_classical.append("meta_preprocessor")
+    if bundle.clf_audio is None:
+        missing_classical.append("audio_expert")
+    if bundle.clf_clinical is None:
+        missing_classical.append("clinical_expert")
+    if bundle.cal_supervisor is None:
+        missing_classical.append("calibrated_supervisor")
+    if missing_classical:
+        raise RuntimeError(
+            "Classical model components missing or failed to load: "
+            + ", ".join(missing_classical)
+            + ". Ensure required ML dependencies (e.g. lightgbm) are installed."
+        )
+
     hear_path = Path(settings.local_hear)
     if hear_path.exists():
         try:
@@ -123,14 +140,6 @@ def get_models() -> ModelBundle:
             log_event(logger, "model_load_warning", model="medgemma", error=str(exc))
 
     missing = []
-    if bundle.meta_prep is None:
-        missing.append("meta_preprocessor")
-    if bundle.clf_audio is None:
-        missing.append("audio_expert")
-    if bundle.clf_clinical is None:
-        missing.append("clinical_expert")
-    if bundle.cal_supervisor is None:
-        missing.append("calibrated_supervisor")
     if bundle.hear_serving is None:
         missing.append("hear_serving")
     if bundle.medgemma is None:

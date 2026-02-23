@@ -14,6 +14,7 @@ import {
   YAxis,
 } from "recharts"
 import { db } from "@/lib/firebase"
+import { normalizeAiRiskScore } from "@/lib/ai"
 import { normalizeTriageStatus, triageStatusLabel } from "@/lib/triage-status"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -67,7 +68,7 @@ interface PatientRecord {
 }
 
 function patientPriorityScore(patient: PatientRecord): number {
-  const risk = Number(patient.ai?.risk_score || 0)
+  const risk = normalizeAiRiskScore(patient.ai?.risk_score)
   const status = normalizeTriageStatus(patient.status?.triage_status)
   const statusBoost = status === "TEST_QUEUED" ? 1.5 : status === "AI_TRIAGED" ? 1.1 : 0
   return Number((risk + statusBoost).toFixed(2))
@@ -196,7 +197,7 @@ export function AdminDashboard() {
   const highRiskPending = useMemo(() => {
     return filteredPatients
       .filter((p) => {
-        const risk = Number(p.ai?.risk_score || 0)
+        const risk = normalizeAiRiskScore(p.ai?.risk_score)
         const status = normalizeTriageStatus(p.status?.triage_status)
         return risk >= 7 && (status === "AI_TRIAGED" || status === "TEST_QUEUED")
       })
@@ -260,7 +261,7 @@ export function AdminDashboard() {
   const riskBuckets = useMemo(() => {
     const buckets = { High: 0, Medium: 0, Low: 0 }
     filteredPatients.forEach((p) => {
-      const score = Number(p.ai?.risk_score || 0)
+      const score = normalizeAiRiskScore(p.ai?.risk_score)
       if (score >= 7) buckets.High += 1
       else if (score >= 4) buckets.Medium += 1
       else buckets.Low += 1
@@ -279,7 +280,7 @@ export function AdminDashboard() {
 
   const csvRows = useMemo(() => {
     if (!csvOnlyHighRisk) return filteredPatients
-    return filteredPatients.filter((p) => Number(p.ai?.risk_score || 0) >= 7)
+    return filteredPatients.filter((p) => normalizeAiRiskScore(p.ai?.risk_score) >= 7)
   }, [filteredPatients, csvOnlyHighRisk])
 
   const exportCsv = () => {
@@ -322,7 +323,7 @@ export function AdminDashboard() {
           p.demographics?.village || "",
           p.demographics?.pincode || "",
           p.facility_name || p.facility_id || "",
-          Number(p.ai?.risk_score || 0).toFixed(2),
+          normalizeAiRiskScore(p.ai?.risk_score).toFixed(2),
           p.ai?.risk_level || "",
           normalizeTriageStatus(p.status?.triage_status),
           p.assigned_doctor_id || "",
@@ -503,7 +504,7 @@ export function AdminDashboard() {
                       <td className="p-2">{p.demographics?.name || "Unknown"}</td>
                       <td className="p-2">{p.sample_id || "-"}</td>
                       <td className="p-2">{facilityMap[p.facility_id || ""]?.name || p.facility_id || "-"}</td>
-                      <td className="p-2">{Number(p.ai?.risk_score || 0).toFixed(1)}</td>
+                      <td className="p-2">{normalizeAiRiskScore(p.ai?.risk_score).toFixed(1)}</td>
                       <td className="p-2">{triageStatusLabel(p.status?.triage_status)}</td>
                       <td className="p-2 font-semibold">{patientPriorityScore(p).toFixed(2)}</td>
                     </tr>

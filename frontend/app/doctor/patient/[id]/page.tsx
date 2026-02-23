@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { doc, getDoc, updateDoc } from "firebase/firestore"
 import { auth, db } from "@/lib/firebase"
+import { getAiSummaryText, normalizeAiRiskScore } from "@/lib/ai"
 import { addUpload } from "@/lib/db"
 import { resolveStorageUrl } from "@/lib/storage-utils"
 import { syncUploads } from "@/lib/sync"
@@ -20,7 +21,13 @@ interface PatientRecord {
   demographics?: { name?: string; phone?: string; age?: number; gender?: string }
   clinical?: { cough_nature?: string; fever_history?: string; other_observations?: string }
   symptoms?: { symptom_code: string; severity?: string; duration_days?: number }[]
-  ai?: { risk_score?: number; medgemini_summary?: string }
+  ai?: {
+    risk_score?: number
+    medgemini_summary?: string | { en?: string; hi?: string }
+    medgemini_summary_en?: string
+    medgemini_summary_hi?: string
+    medgemini_summary_i18n?: { en?: string; hi?: string }
+  }
   audio?: { storage_uri?: string; storage_path?: string; download_url?: string; file_name?: string }[]
   status?: { triage_status?: string }
   doctor_notes?: string
@@ -248,8 +255,8 @@ export default function DoctorPatientPage() {
           <div className="text-sm text-muted-foreground">Sample ID: {patient.sample_id || "-"}</div>
           <div className="text-sm">Phone: {patient.demographics?.phone || "-"}</div>
           <div className="text-sm">Age: {patient.demographics?.age || "-"}</div>
-          <div className="text-sm">Risk: {patient.ai?.risk_score ?? 0}</div>
-          <div className="text-sm">AI Summary: {patient.ai?.medgemini_summary || "-"}</div>
+          <div className="text-sm">Risk: {normalizeAiRiskScore(patient.ai?.risk_score).toFixed(1)}</div>
+          <div className="text-sm">AI Summary: {getAiSummaryText(patient.ai, "en") || "-"}</div>
         </CardContent>
       </Card>
 

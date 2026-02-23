@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation"
 import { onAuthStateChanged } from "firebase/auth"
 import { doc, getDoc } from "firebase/firestore"
 import { auth, db } from "@/lib/firebase"
+import { getAiSummaryText, normalizeAiRiskScore } from "@/lib/ai"
 import { resolveStorageUrl } from "@/lib/storage-utils"
 import { triageStatusLabel } from "@/lib/triage-status"
 import { Button } from "@/components/ui/button"
@@ -18,7 +19,14 @@ interface PatientRecord {
   assigned_doctor_id?: string
   assigned_lab_tech_id?: string
   demographics?: { name?: string; phone?: string; age?: number; gender?: string; village?: string; pincode?: string }
-  ai?: { risk_score?: number; risk_level?: string; medgemini_summary?: string }
+  ai?: {
+    risk_score?: number
+    risk_level?: string
+    medgemini_summary?: string | { en?: string; hi?: string }
+    medgemini_summary_en?: string
+    medgemini_summary_hi?: string
+    medgemini_summary_i18n?: { en?: string; hi?: string }
+  }
   status?: { triage_status?: string }
   gps?: { lat?: number; lng?: number }
   audio?: { storage_uri?: string; storage_path?: string; download_url?: string; file_name?: string }[]
@@ -88,8 +96,8 @@ export default function AdminPatientPage() {
           <div>Assigned Doctor UID: {patient.assigned_doctor_id || "-"}</div>
           <div>Assigned Lab UID: {patient.assigned_lab_tech_id || "-"}</div>
           <div>Status: {triageStatusLabel(patient.status?.triage_status)}</div>
-          <div>AI Risk: {patient.ai?.risk_score ?? 0} ({patient.ai?.risk_level || "-"})</div>
-          <div>AI Summary: {patient.ai?.medgemini_summary || "-"}</div>
+          <div>AI Risk: {normalizeAiRiskScore(patient.ai?.risk_score).toFixed(1)} ({patient.ai?.risk_level || "-"})</div>
+          <div>AI Summary: {getAiSummaryText(patient.ai, "en") || "-"}</div>
           <div>GPS: {patient.gps?.lat ?? "-"}, {patient.gps?.lng ?? "-"}</div>
         </CardContent>
       </Card>

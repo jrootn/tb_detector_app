@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { collection, onSnapshot, query, where } from "firebase/firestore"
 import { db, auth } from "@/lib/firebase"
+import { normalizeAiRiskScore } from "@/lib/ai"
 import { addUpload } from "@/lib/db"
 import { syncUploads } from "@/lib/sync"
 import { resolveStorageUrl } from "@/lib/storage-utils"
@@ -26,6 +27,10 @@ interface PatientRecord {
   asha_worker_id?: string
   asha_name?: string
   asha_phone_number?: string
+}
+
+function getPatientRiskScore(patient: PatientRecord): number {
+  return normalizeAiRiskScore(patient.ai?.risk_score)
 }
 
 interface LabQueueProps {
@@ -104,8 +109,8 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
       const aRank = a.doctor_rank ?? 0
       const bRank = b.doctor_rank ?? 0
       if (aRank !== bRank) return aRank - bRank
-      const aScore = a.ai?.risk_score ?? 0
-      const bScore = b.ai?.risk_score ?? 0
+      const aScore = getPatientRiskScore(a)
+      const bScore = getPatientRiskScore(b)
       return bScore - aScore
     })
   }, [scopedPatients])
@@ -113,7 +118,7 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
   const filtered = useMemo(() => {
     const now = new Date()
     return ordered.filter((p) => {
-      const score = p.ai?.risk_score ?? 0
+      const score = getPatientRiskScore(p)
       if (score < minScore) return false
 
       const status = p.status?.triage_status
@@ -240,8 +245,8 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
               <tr key={p.id} className="border-t">
                 <td className="p-3">{p.sample_id || "-"}</td>
                 <td className="p-3">{p.demographics?.name || "Unknown"}</td>
-                <td className={`p-3 ${p.ai?.risk_score && p.ai.risk_score >= 8 ? "text-red-600" : "text-emerald-600"}`}>
-                  {p.ai?.risk_score ?? 0}
+                <td className={`p-3 ${getPatientRiskScore(p) >= 8 ? "text-red-600" : "text-emerald-600"}`}>
+                  {getPatientRiskScore(p).toFixed(1)}
                 </td>
                 <td className="p-3">
                   {Boolean(

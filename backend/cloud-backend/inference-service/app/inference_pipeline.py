@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Tuple
 
 import librosa
@@ -113,10 +114,68 @@ def _risk_level(score: float) -> str:
     return "LOW"
 
 
-def _clean_llm_output(prompt: str, output: str) -> str:
-    text = output.replace(prompt, "")
-    text = text.replace("<end_of_turn>", "").strip()
+def _clean_llm_output(prompt: str, output: str, *, language: str) -> str:
+    text = str(output or "").replace(prompt, "")
+    text = text.replace("<end_of_turn>", "")
+    text = text.replace("<start_of_turn>model", "")
+    text = text.replace("<start_of_turn>user", "")
+    text = re.sub(r"<unused\d+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # Prefer explicit tagged final output if model follows instructions.
+    final_match = re.search(r"<final>(.*?)</final>", text, flags=re.IGNORECASE | re.DOTALL)
+    if final_match:
+        text = final_match.group(1).strip()
+
+    # Remove common reasoning/chain-of-thought artifacts.
+    bad_fragments = (
+        "thinking process",
+        "chain of thought",
+        "let's think",
+        "reasoning:",
+        "analysis:",
+        "step-by-step",
+        "first,",
+        "second,",
+        "third,",
+    )
+    lines = [ln.strip() for ln in re.split(r"[\r\n]+", text) if ln.strip()]
+    lines = [ln for ln in lines if not any(b in ln.lower() for b in bad_fragments)]
+    text = " ".join(lines).strip()
+
+    if language == "hi":
+        # Keep Hindi answer body if mixed with English artifacts.
+        m = re.search(r"[\u0900-\u097F].*", text)
+        if m:
+            text = m.group(0).strip()
+
+    # Keep only first 2 sentences to match UI expectation.
+    parts = [p.strip() for p in re.split(r"(?<=[\.\!\?।])\s+", text) if p.strip()]
+    if len(parts) > 2:
+        text = " ".join(parts[:2]).strip()
+
     return text
+
+
+def _contains_devanagari(text: str) -> bool:
+    return bool(re.search(r"[\u0900-\u097F]", text or ""))
+
+
+def _fallback_summary_en(patient_dict: Dict[str, Any], final_score: float) -> str:
+    level = _risk_level(final_score)
+    return (
+        f"The clinical and acoustic features indicate a {level.lower()} TB risk profile with final score {final_score:.2f}. "
+        "Please correlate with clinical examination and confirmatory testing."
+    )
+
+
+def _fallback_summary_hi(patient_dict: Dict[str, Any], final_score: float) -> str:
+    level_map = {"HIGH": "उच्च", "MEDIUM": "मध्यम", "LOW": "निम्न"}
+    level = level_map.get(_risk_level(final_score), "मध्यम")
+    return (
+        f"क्लिनिकल और ऑडियो संकेतों के आधार पर टीबी जोखिम {level} है और अंतिम स्कोर {final_score:.2f} है। "
+        "कृपया नैदानिक जांच और पुष्टिकरण परीक्षण के साथ निर्णय लें।"
+    )
 
 
 def _generate_summaries(patient_dict: Dict[str, Any], prob_a: float, prob_m: float, final_score: float, medgemma: Any) -> Tuple[str, str]:
@@ -127,10 +186,19 @@ def _generate_summaries(patient_dict: Dict[str, Any], prob_a: float, prob_m: flo
         f"Weight loss: {patient_dict.get('weight_loss', 'Missing')}, Night Sweats: {patient_dict.get('night_sweats', 'Missing')}.\n"
         f"AI Assessment: Acoustic Risk: {prob_a:.2f}, Clinical Risk: {prob_m:.2f}, Final Risk: {final_score:.2f}.\n"
         "TASK: Write a concise 2-sentence clinical justification in English.\n"
+        "Output strictly as:\n<final>Sentence 1. Sentence 2.</final>\n"
+        "Do not include reasoning, analysis, or meta text.\n"
         "<end_of_turn>\n<start_of_turn>model\n"
     )
     out_en = medgemma.generate(prompt_en, max_length=256)
-    summary_en = _clean_llm_output(prompt_en, out_en)
+    summary_en = _clean_llm_output(prompt_en, out_en, language="en")
+    if (
+        not summary_en
+        or summary_en.lower().startswith("sentence 1")
+        or "thought" in summary_en.lower()
+        or "user wants me" in summary_en.lower()
+    ):
+        summary_en = _fallback_summary_en(patient_dict, final_score)
 
     prompt_hi = (
         "<start_of_turn>user\n"
@@ -139,10 +207,19 @@ def _generate_summaries(patient_dict: Dict[str, Any], prob_a: float, prob_m: flo
         f"Weight loss: {patient_dict.get('weight_loss', 'Missing')}, Night Sweats: {patient_dict.get('night_sweats', 'Missing')}.\n"
         f"AI Assessment: Acoustic Risk: {prob_a:.2f}, Clinical Risk: {prob_m:.2f}, Final Risk: {final_score:.2f}.\n"
         "TASK: Write a concise 2-sentence clinical justification in Hindi (Devanagari script).\n"
+        "Output strictly as:\n<final>Sentence 1. Sentence 2.</final>\n"
+        "Do not include reasoning, analysis, transliteration, or English meta text.\n"
         "<end_of_turn>\n<start_of_turn>model\n"
     )
     out_hi = medgemma.generate(prompt_hi, max_length=256)
-    summary_hi = _clean_llm_output(prompt_hi, out_hi)
+    summary_hi = _clean_llm_output(prompt_hi, out_hi, language="hi")
+    if (
+        not summary_hi
+        or not _contains_devanagari(summary_hi)
+        or "thought" in summary_hi.lower()
+        or "user wants me" in summary_hi.lower()
+    ):
+        summary_hi = _fallback_summary_hi(patient_dict, final_score)
 
     return summary_en, summary_hi
 

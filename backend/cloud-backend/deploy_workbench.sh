@@ -51,8 +51,14 @@ if ! command -v npm >/dev/null 2>&1; then
   echo "npm not found"
   exit 1
 fi
-if ! command -v firebase >/dev/null 2>&1; then
-  echo "firebase CLI not found. Install: npm i -g firebase-tools"
+
+FIREBASE_CMD=()
+if command -v firebase >/dev/null 2>&1; then
+  FIREBASE_CMD=(firebase)
+elif command -v npx >/dev/null 2>&1; then
+  FIREBASE_CMD=(npx firebase-tools)
+else
+  echo "firebase CLI not found and npx unavailable. Install firebase-tools or Node.js/npm with npx."
   exit 1
 fi
 
@@ -167,8 +173,8 @@ gcloud run services add-iam-policy-binding "$RUN_SERVICE" \
 
 echo "==> Writing functions/.env"
 cat > "$SCRIPT_DIR/functions/.env" <<EOV
-GCLOUD_PROJECT=$PROJECT_ID
-FUNCTION_REGION=$REGION
+APP_PROJECT_ID=$PROJECT_ID
+APP_FUNCTION_REGION=$REGION
 TASKS_REGION=$REGION
 INFERENCE_QUEUE_NAME=$QUEUE_NAME
 INFERENCE_URL=$INFERENCE_URL
@@ -180,8 +186,8 @@ echo "==> Deploying Firebase Function trigger"
 cd "$SCRIPT_DIR/functions"
 npm ci >/dev/null
 npm run build >/dev/null
-firebase use "$PROJECT_ID" >/dev/null
-firebase deploy --only functions:onPatientWriteEnqueueInference
+"${FIREBASE_CMD[@]}" use "$PROJECT_ID" >/dev/null
+"${FIREBASE_CMD[@]}" deploy --only functions:tb-inference-triggers:onPatientWriteEnqueueInference
 
 echo ""
 echo "Done."
