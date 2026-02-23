@@ -37,6 +37,7 @@ class Settings(BaseModel):
     gcs_hear_prefix: str = Field(default_factory=lambda: os.getenv("GCS_HEAR_PREFIX", "models/Hear_model/hear_model_offline"))
 
     log_level: str = Field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
+    warm_load_on_startup: bool = Field(default_factory=lambda: _bool_env("WARM_LOAD_ON_STARTUP", False))
 
 
 settings = Settings()

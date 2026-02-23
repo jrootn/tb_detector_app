@@ -90,4 +90,5 @@ gcloud tasks queues describe tb-inference-queue --location "$REGION"
 
 - The service now runs with the real HEAR + classical + MedGemma pipeline.
 - Make sure model files exist in GCS at the configured prefixes (or local mounted paths), otherwise startup will fail fast.
+- `WARM_LOAD_ON_STARTUP=0` is recommended for Cloud Run so health checks pass quickly; first inference request will take longer while models load.
 - Scale-to-zero is already configured (`--min-instances=0`).

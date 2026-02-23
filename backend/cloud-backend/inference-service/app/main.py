@@ -20,13 +20,17 @@ logger = get_logger("tb-inference-service")
 
 @app.on_event("startup")
 def on_startup() -> None:
-    get_models()
+    # For Cloud Run scale-to-zero, avoid long startup blocking probes by default.
+    # Models are loaded lazily on first /internal/infer request.
+    if settings.warm_load_on_startup:
+        get_models()
     log_event(
         logger,
         "startup_complete",
         project_id=settings.project_id,
         model_version=settings.model_version,
         target_model_version=settings.target_model_version,
+        warm_load_on_startup=settings.warm_load_on_startup,
     )
 
 
