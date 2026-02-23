@@ -161,6 +161,32 @@ export function AppShell({
       .catch(() => undefined)
   }, [dbReady, isOnline])
 
+  // Periodic foreground sync keeps ASHA risk/status cards aligned with backend AI updates.
+  useEffect(() => {
+    if (!dbReady || !isOnline || !ashaId || currentScreen === "login") return
+    let cancelled = false
+    let inFlight = false
+
+    const runSync = async () => {
+      if (cancelled || inFlight) return
+      inFlight = true
+      try {
+        await syncData()
+      } catch (error) {
+        console.warn("Periodic sync failed", error)
+      } finally {
+        inFlight = false
+      }
+    }
+
+    runSync()
+    const timer = window.setInterval(runSync, 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [dbReady, isOnline, ashaId, currentScreen])
+
   // Persist patient changes to IndexedDB
   useEffect(() => {
     if (!dbReady) return
