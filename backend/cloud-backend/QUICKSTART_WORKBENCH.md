@@ -86,6 +86,18 @@ gcloud tasks queues describe tb-inference-queue --location "$REGION"
 - `ai.model_version`
 - `ai.medgemini_summary_en`, `ai.medgemini_summary_hi`, `ai.medgemini_summary_i18n`
 
+## 5) Backfill existing patient docs
+
+If you already have patient docs and want to trigger inference for all eligible records:
+
+```bash
+cd /home/jroot/TB-medgemma
+python backend/cloud-backend/backfill_inference_requests.py --limit 500   # dry-run
+python backend/cloud-backend/backfill_inference_requests.py --apply        # execute
+```
+
+Eligibility rule: the document must contain at least one `audio[]` item with `storage_path` or `storage_uri`.
+
 ## Notes
 
 - The service now runs with the real HEAR + classical + MedGemma pipeline.
