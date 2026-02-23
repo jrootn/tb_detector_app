@@ -4,6 +4,8 @@ This folder contains a production-ready backend scaffold for TB inference in clo
 
 - `inference-service/`: FastAPI service for model inference on Cloud Run.
 - `functions/`: Firebase Functions v2 trigger that enqueues Cloud Tasks for inference.
+- `deploy_workbench.sh`: one-command deployment script for GCP Workbench.
+- `QUICKSTART_WORKBENCH.md`: copy-paste deployment guide.
 
 ## Architecture
 
@@ -26,6 +28,12 @@ This folder contains a production-ready backend scaffold for TB inference in clo
 1. Deploy `inference-service` to Cloud Run (private).
 2. Create Cloud Tasks queue.
 3. Deploy `functions` trigger with env vars pointing to Cloud Run URL and queue.
+
+Or use the Workbench quickstart:
+
+1. `cp deploy.env.example deploy.env`
+2. Edit `deploy.env`
+3. `bash deploy_workbench.sh`
 
 ## Notes
 
