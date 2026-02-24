@@ -7,6 +7,7 @@ import { doc, getDoc } from "firebase/firestore"
 import { auth, db } from "@/lib/firebase"
 import { normalizeAiRiskScore } from "@/lib/ai"
 import { resolveStorageUrl } from "@/lib/storage-utils"
+import { getCachedUserName, resolveUserName } from "@/lib/user-names"
 import { triageStatusLabel } from "@/lib/triage-status"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -35,6 +36,7 @@ export default function LabPatientPage() {
   const [ready, setReady] = useState(false)
   const [patient, setPatient] = useState<PatientRecord | null>(null)
   const [reportUrl, setReportUrl] = useState<string | null>(null)
+  const [collectedByName, setCollectedByName] = useState<string>("")
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -57,6 +59,20 @@ export default function LabPatientPage() {
         }
         const data = patientSnap.data() as PatientRecord
         setPatient({ id, ...data })
+        const ashaUid = data.asha_id || data.asha_worker_id
+        if (data.asha_name && data.asha_name.trim().length > 0) {
+          setCollectedByName(data.asha_name)
+        } else if (ashaUid) {
+          const cached = getCachedUserName(ashaUid)
+          if (cached) {
+            setCollectedByName(cached)
+          } else {
+            const resolved = await resolveUserName(ashaUid)
+            setCollectedByName(resolved || "ASHA Worker")
+          }
+        } else {
+          setCollectedByName("ASHA Worker")
+        }
         const latest =
           data.lab_results?.report_uri ||
           data.lab_results?.report_path ||
@@ -98,7 +114,7 @@ export default function LabPatientPage() {
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
           <div>Sample ID: {patient.sample_id || "-"}</div>
-          <div>Collected by: {patient.asha_name || patient.asha_id || patient.asha_worker_id || "-"}</div>
+          <div>Collected by: {collectedByName || patient.asha_name || "ASHA Worker"}</div>
           <div>Collected at: {collectedAtLabel}</div>
           <div>Phone: {patient.demographics?.phone || "-"}</div>
           <div>Risk Score: {riskScore == null ? "Awaiting AI" : `${riskScore.toFixed(1)} / 10 (${Math.round(riskScore * 10)}%)`}</div>

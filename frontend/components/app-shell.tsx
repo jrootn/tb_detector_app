@@ -9,8 +9,16 @@ import { PatientProfile } from "./patient-profile"
 import { PriorityView } from "./priority-view"
 import { UserProfileSettings } from "./user-profile-settings"
 import { mockPatients, type Patient } from "@/lib/mockData"
-import { getPatientsForAsha, savePatients, seedPatientsIfEmpty, getPendingUploadCount } from "@/lib/db"
-import { syncData } from "@/lib/sync"
+import {
+  cleanupLegacyMockPatients,
+  cleanupOrphanUploads,
+  getPatientsForAsha,
+  savePatients,
+  seedPatientsIfEmpty,
+  getPendingUploads,
+  type UploadRecord,
+} from "@/lib/db"
+import { hydrateAshaPatientsFromCloud, syncData } from "@/lib/sync"
 
 type Screen = "login" | "dashboard" | "screening" | "profile" | "priority" | "settings"
 
@@ -49,6 +57,23 @@ function withCollectorName(patients: Patient[], ashaId?: string, ashaName?: stri
   })
 }
 
+function withPendingSyncOverlay(patients: Patient[], pendingPatientIds: Set<string>) {
+  if (pendingPatientIds.size === 0) return patients
+  return patients.map((patient) =>
+    pendingPatientIds.has(patient.id) ? { ...patient, needsSync: true } : patient
+  )
+}
+
+function getRelevantAshaPendingUploads(uploads: UploadRecord[], visiblePatientIds?: Set<string>) {
+  return uploads.filter((upload) => {
+    if (upload.role !== "ASHA") return false
+    if (upload.kind !== "audio") return false
+    if (upload.patientId === "pending") return false
+    if (visiblePatientIds && !visiblePatientIds.has(upload.patientId)) return false
+    return true
+  })
+}
+
 export function AppShell({
   initialScreen = "login",
   initialAshaId = "",
@@ -61,6 +86,7 @@ export function AppShell({
   const [ashaId, setAshaId] = useState(initialAshaId)
   const [ashaName, setAshaName] = useState(initialAshaName)
   const [pendingUploads, setPendingUploads] = useState(0)
+  const [pendingUploadPatientIds, setPendingUploadPatientIds] = useState<string[]>([])
   const [patients, setPatients] = useState<Patient[]>([])
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
   const [dbReady, setDbReady] = useState(false)
@@ -142,15 +168,44 @@ export function AppShell({
       try {
         if (enableMockSeed) {
           await seedPatientsIfEmpty(mockPatients)
+        } else {
+          await cleanupLegacyMockPatients()
         }
+        await cleanupOrphanUploads(initialAshaId || undefined)
         const stored = await getPatientsForAsha(initialAshaId || undefined)
-        const scoped = stored.map((patient) =>
-          initialAshaId && !patient.ashaId && patient.needsSync ? { ...patient, ashaId: initialAshaId } : patient
+        const visiblePatientIds = new Set(stored.map((patient) => patient.id))
+        const rawUploads = await getPendingUploads(initialAshaId || undefined)
+        const pendingUploads = getRelevantAshaPendingUploads(rawUploads, visiblePatientIds)
+        const pendingPatientIds = new Set(pendingUploads.map((upload) => upload.patientId))
+        const ordered = sortPatientsForQueue(
+          withCollectorName(withPendingSyncOverlay(stored, pendingPatientIds), initialAshaId, initialAshaName)
         )
-        const ordered = sortPatientsForQueue(withCollectorName(scoped, initialAshaId, initialAshaName))
         if (isMounted) setPatients(ordered)
-        const pendingCount = await getPendingUploadCount(initialAshaId || undefined)
+        const pendingCount = pendingUploads.length
         if (isMounted) setPendingUploads(pendingCount)
+        if (isMounted) setPendingUploadPatientIds(Array.from(pendingPatientIds))
+
+        // If local cache is empty but user is online, force a direct cloud hydration.
+        // This prevents "no patients" states caused by local cache resets/timing races.
+        if (ordered.length === 0 && initialAshaId && typeof navigator !== "undefined" && navigator.onLine) {
+          try {
+            const refreshed = await hydrateAshaPatientsFromCloud(initialAshaId)
+            const refreshedUploadsRaw = await getPendingUploads(initialAshaId)
+            const refreshedPending = getRelevantAshaPendingUploads(
+              refreshedUploadsRaw,
+              new Set(refreshed.map((patient) => patient.id))
+            )
+            const refreshedPendingIds = new Set(refreshedPending.map((upload) => upload.patientId))
+            const refreshedOrdered = sortPatientsForQueue(
+              withCollectorName(withPendingSyncOverlay(refreshed, refreshedPendingIds), initialAshaId, initialAshaName)
+            )
+            if (isMounted) setPatients(refreshedOrdered)
+            if (isMounted) setPendingUploads(refreshedPending.length)
+            if (isMounted) setPendingUploadPatientIds(Array.from(refreshedPendingIds))
+          } catch {
+            // Keep local state as-is; periodic sync will retry.
+          }
+        }
       } catch (error) {
         console.error("Failed to load patients from IndexedDB", error)
       } finally {
@@ -167,11 +222,18 @@ export function AppShell({
   // Refresh from IndexedDB after sync completes
   useEffect(() => {
     const refreshLocal = async () => {
+      await cleanupOrphanUploads(ashaId || undefined)
       const stored = await getPatientsForAsha(ashaId || undefined)
-      const ordered = sortPatientsForQueue(withCollectorName(stored, ashaId, ashaName))
+      const visiblePatientIds = new Set(stored.map((patient) => patient.id))
+      const rawUploads = await getPendingUploads(ashaId || undefined)
+      const pendingUploads = getRelevantAshaPendingUploads(rawUploads, visiblePatientIds)
+      const pendingPatientIds = new Set(pendingUploads.map((upload) => upload.patientId))
+      const ordered = sortPatientsForQueue(
+        withCollectorName(withPendingSyncOverlay(stored, pendingPatientIds), ashaId, ashaName)
+      )
       setPatients(ordered)
-      const pendingCount = await getPendingUploadCount(ashaId || undefined)
-      setPendingUploads(pendingCount)
+      setPendingUploads(pendingUploads.length)
+      setPendingUploadPatientIds(Array.from(pendingPatientIds))
     }
 
     const syncCompleteHandler = () => void refreshLocal()
@@ -192,11 +254,21 @@ export function AppShell({
   // When back online, refresh local cache to clear stale sync flags
   useEffect(() => {
     if (!dbReady || !isOnline) return
-    Promise.all([getPatientsForAsha(ashaId || undefined), getPendingUploadCount(ashaId || undefined)])
-      .then(([stored, pendingCount]) => {
-        const ordered = sortPatientsForQueue(withCollectorName(stored, ashaId, ashaName))
+    Promise.all([
+      cleanupOrphanUploads(ashaId || undefined),
+      getPatientsForAsha(ashaId || undefined),
+      getPendingUploads(ashaId || undefined),
+    ])
+      .then(([, stored, uploads]) => {
+        const visiblePatientIds = new Set(stored.map((patient) => patient.id))
+        const pendingUploads = getRelevantAshaPendingUploads(uploads, visiblePatientIds)
+        const pendingPatientIds = new Set(pendingUploads.map((upload) => upload.patientId))
+        const ordered = sortPatientsForQueue(
+          withCollectorName(withPendingSyncOverlay(stored, pendingPatientIds), ashaId, ashaName)
+        )
         setPatients(ordered)
-        setPendingUploads(pendingCount)
+        setPendingUploads(pendingUploads.length)
+        setPendingUploadPatientIds(Array.from(pendingPatientIds))
       })
       .catch(() => undefined)
   }, [dbReady, isOnline, ashaId, ashaName])
@@ -226,6 +298,32 @@ export function AppShell({
       window.clearInterval(timer)
     }
   }, [dbReady, isOnline, ashaId, currentScreen])
+
+  // Drain pending uploads aggressively while online so AI pipeline can trigger without manual retries.
+  useEffect(() => {
+    if (!dbReady || !isOnline || !ashaId || pendingUploads <= 0 || currentScreen === "login") return
+    let cancelled = false
+    let inFlight = false
+
+    const runUploadSync = async () => {
+      if (cancelled || inFlight) return
+      inFlight = true
+      try {
+        await syncData({ uploadsOnly: true })
+      } catch (error) {
+        console.warn("Pending upload sync retry failed", error)
+      } finally {
+        inFlight = false
+      }
+    }
+
+    runUploadSync()
+    const timer = window.setInterval(runUploadSync, 15_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [dbReady, isOnline, ashaId, pendingUploads, currentScreen])
 
   // Persist patient changes to IndexedDB
   useEffect(() => {
@@ -268,6 +366,14 @@ export function AppShell({
     const next = newPatient.ashaId ? newPatient : { ...newPatient, ashaId, ashaName }
     setPatients((prev) => sortPatientsForQueue([next, ...prev]))
     localStorage.setItem("tb_local_patients_updated_at", String(Date.now()))
+    getPendingUploads(ashaId || undefined)
+      .then((uploads) => {
+        const pending = getRelevantAshaPendingUploads(uploads)
+        const pendingIds = pending.map((upload) => upload.patientId)
+        setPendingUploads(pending.length)
+        setPendingUploadPatientIds(Array.from(new Set(pendingIds)))
+      })
+      .catch(() => undefined)
     if (navigator.onLine) {
       syncData().catch((error) => {
         console.warn("Auto-sync after screening failed", error)
@@ -275,6 +381,21 @@ export function AppShell({
     }
     setCurrentScreen("dashboard")
   }, [ashaId, ashaName])
+
+  const handlePendingUploadsSync = useCallback(async () => {
+    if (!navigator.onLine || !ashaId) return
+    try {
+      await syncData({ uploadsOnly: true })
+      const uploads = await getPendingUploads(ashaId)
+      const visiblePatientIds = new Set((await getPatientsForAsha(ashaId)).map((patient) => patient.id))
+      const pending = getRelevantAshaPendingUploads(uploads, visiblePatientIds)
+      const pendingIds = pending.map((upload) => upload.patientId)
+      setPendingUploads(pending.length)
+      setPendingUploadPatientIds(Array.from(new Set(pendingIds)))
+    } catch (error) {
+      console.warn("Pending uploads sync failed", error)
+    }
+  }, [ashaId])
 
   return (
     <LanguageProvider>
@@ -288,11 +409,13 @@ export function AppShell({
             isOnline={isOnline}
             patients={patients}
             pendingUploads={pendingUploads}
+            pendingUploadPatientIds={pendingUploadPatientIds}
             onLogout={handleLogout}
             onNewScreening={() => setCurrentScreen("screening")}
             onViewPatient={handleViewPatient}
             onViewPriority={() => setCurrentScreen("priority")}
             onOpenProfile={() => setCurrentScreen("settings")}
+            onSyncPendingUploads={handlePendingUploadsSync}
             gpsLocation={gpsLocation}
           />
         )}

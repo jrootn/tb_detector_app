@@ -8,6 +8,7 @@ import { getAiSummaryText, normalizeAiRiskScore } from "@/lib/ai"
 import { addUpload } from "@/lib/db"
 import { resolveStorageUrl } from "@/lib/storage-utils"
 import { syncUploads } from "@/lib/sync"
+import { getCachedUserName, resolveUserName } from "@/lib/user-names"
 import { normalizeTriageStatus, triageStatusLabel } from "@/lib/triage-status"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -80,6 +81,7 @@ export default function DoctorPatientPage() {
   const [resolvedReport, setResolvedReport] = useState<string | null>(null)
   const [resolvedLabFiles, setResolvedLabFiles] = useState<Record<number, string>>({})
   const [resolvedDoctorFiles, setResolvedDoctorFiles] = useState<Record<number, string>>({})
+  const [collectedByName, setCollectedByName] = useState<string>("")
 
   const loadPatient = useCallback(async () => {
     const id = params.id
@@ -129,6 +131,21 @@ export default function DoctorPatientPage() {
       )
     }
     setResolvedDoctorFiles(doctorFileUrls)
+
+    const ashaUid = data.asha_id || data.asha_worker_id
+        if (data.asha_name && data.asha_name.trim().length > 0) {
+          setCollectedByName(data.asha_name)
+        } else if (ashaUid) {
+          const cached = getCachedUserName(ashaUid)
+          if (cached) {
+            setCollectedByName(cached)
+          } else {
+            const resolved = await resolveUserName(ashaUid)
+            setCollectedByName(resolved || "ASHA Worker")
+          }
+        } else {
+          setCollectedByName("ASHA Worker")
+        }
   }, [params.id, router])
 
   useEffect(() => {
@@ -271,7 +288,7 @@ export default function DoctorPatientPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="text-sm text-muted-foreground">Sample ID: {patient.sample_id || "-"}</div>
-          <div className="text-sm">Collected by: {patient.asha_name || patient.asha_id || patient.asha_worker_id || "-"}</div>
+          <div className="text-sm">Collected by: {collectedByName || patient.asha_name || "ASHA Worker"}</div>
           <div className="text-sm">Collected at: {collectedAtLabel}</div>
           <div className="text-sm">Phone: {patient.demographics?.phone || "-"}</div>
           <div className="text-sm">Age: {patient.demographics?.age || "-"}</div>

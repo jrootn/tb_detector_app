@@ -44,7 +44,8 @@ export async function getAllPatients() {
 export async function getPatientsForAsha(ashaId?: string) {
   const all = await db.patients.toArray()
   if (!ashaId) return all
-  return all.filter((patient) => patient.ashaId === ashaId || (!patient.ashaId && patient.needsSync))
+  // Strict user scoping avoids cross-account leakage from legacy local records.
+  return all.filter((patient) => patient.ashaId === ashaId)
 }
 
 export async function seedPatientsIfEmpty(patients: PatientRecord[]) {
@@ -116,6 +117,25 @@ export async function getPendingUploadCount(ownerUid?: string) {
   await cleanupOrphanUploads(ownerUid)
   const uploads = await getPendingUploads(ownerUid)
   return uploads.filter((upload) => upload.patientId !== "pending").length
+}
+
+export async function cleanupLegacyMockPatients() {
+  const all = await db.patients.toArray()
+  const legacyIds = all
+    .map((patient) => patient.id)
+    .filter((id) => /^P\d{3}$/.test(id))
+
+  if (legacyIds.length === 0) return 0
+
+  await db.transaction("rw", db.patients, db.uploads, async () => {
+    const legacySet = new Set(legacyIds)
+    await Promise.all(legacyIds.map((id) => db.patients.delete(id)))
+    const uploads = await db.uploads.toArray()
+    const uploadIds = uploads.filter((upload) => legacySet.has(upload.patientId)).map((upload) => upload.id)
+    await Promise.all(uploadIds.map((id) => db.uploads.delete(id)))
+  })
+
+  return legacyIds.length
 }
 
 export { db }

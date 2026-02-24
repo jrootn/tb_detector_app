@@ -142,7 +142,7 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
       const localCollectorName = localStorage.getItem("user_name")
       if (localCollectorName) return localCollectorName
     }
-    return patient.ashaId || "-"
+    return language === "en" ? "ASHA Worker" : "आशा कार्यकर्ता"
   })()
   const collectedAtLabel = (() => {
     const raw = patient.collectedAt || patient.createdAt

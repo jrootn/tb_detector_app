@@ -5,6 +5,7 @@ import dynamic from "next/dynamic"
 import { addDoc, collection, updateDoc, doc, onSnapshot, query, where } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { getAiSummaryText, normalizeAiRiskScore } from "@/lib/ai"
+import { getCachedUserName, resolveUserName } from "@/lib/user-names"
 import {
   isQueueStatus,
   isRankEditableStatus,
@@ -96,12 +97,13 @@ function hasManualDoctorRank(patient: PatientRecord): boolean {
 export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps) {
   const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
+  const [ashaNameByUid, setAshaNameByUid] = useState<Record<string, string>>({})
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null)
   const [view, setView] = useState<"list" | "map" | "analytics">("list")
   const [mounted, setMounted] = useState(false)
   const [filter, setFilter] = useState<"all" | "today" | "week" | "30days" | "date">("all")
   const [specificDate, setSpecificDate] = useState("")
-  const [statusFilter, setStatusFilter] = useState<string>("TEST_QUEUED")
+  const [statusFilter, setStatusFilter] = useState<string>("all")
   const [search, setSearch] = useState("")
   const [isOnline, setIsOnline] = useState(true)
   const [csvOnlyHighRisk, setCsvOnlyHighRisk] = useState(false)
@@ -175,6 +177,16 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
     })
   }, [patients, doctorUid, facilityId])
 
+  const ashaNamesFromRows = useMemo(() => {
+    const map: Record<string, string> = {}
+    patients.forEach((patient) => {
+      const uid = patient.asha_id || patient.asha_worker_id
+      const name = typeof patient.asha_name === "string" ? patient.asha_name.trim() : ""
+      if (uid && name) map[uid] = name
+    })
+    return map
+  }, [patients])
+
   const filtered = useMemo(() => {
     const now = new Date()
     return visiblePatients.filter((p) => {
@@ -242,6 +254,62 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       return a.id.localeCompare(b.id)
     })
   }, [filtered])
+
+  useEffect(() => {
+    let cancelled = false
+    const resolveMissingAshaNames = async () => {
+      const missingUids = Array.from(
+        new Set(
+          sorted
+            .map((patient) => patient.asha_id || patient.asha_worker_id || "")
+            .filter((uid) => uid)
+            .filter(
+              (uid) =>
+                !ashaNameByUid[uid] &&
+                !sorted.some(
+                  (patient) =>
+                    (patient.asha_id === uid || patient.asha_worker_id === uid) &&
+                    typeof patient.asha_name === "string" &&
+                    patient.asha_name.trim().length > 0
+                )
+            )
+        )
+      )
+
+      if (missingUids.length === 0) return
+
+      const resolved = await Promise.all(
+        missingUids.map(async (uid) => {
+          const cached = getCachedUserName(uid)
+          if (cached) return [uid, cached] as const
+          const name = await resolveUserName(uid)
+          return [uid, name || ""] as const
+        })
+      )
+
+      if (cancelled) return
+
+      const updates: Record<string, string> = {}
+      for (const [uid, name] of resolved) {
+        if (name) updates[uid] = name
+      }
+      if (Object.keys(updates).length > 0) {
+        setAshaNameByUid((prev) => ({ ...prev, ...updates }))
+      }
+    }
+
+    resolveMissingAshaNames().catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [sorted, ashaNameByUid])
+
+  const getAshaDisplayName = (patient: PatientRecord): string => {
+    if (patient.asha_name && patient.asha_name.trim().length > 0) return patient.asha_name
+    const uid = patient.asha_id || patient.asha_worker_id
+    if (!uid) return "ASHA Unmapped"
+    return ashaNameByUid[uid] || ashaNamesFromRows[uid] || "ASHA Worker"
+  }
 
   useEffect(() => {
     if (sorted.length === 0) {
@@ -595,7 +663,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                           <td className="p-2">
                             <div>{normalizeName(patient.demographics?.name)}</div>
                             <div className="text-xs text-muted-foreground">
-                              {patient.asha_name || patient.asha_id || patient.asha_worker_id || "ASHA Unmapped"}
+                              {getAshaDisplayName(patient)}
                             </div>
                           </td>
                           <td className="p-2 text-muted-foreground">{patient.sample_id || "-"}</td>
@@ -681,7 +749,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                   <div className="text-base font-semibold">{normalizeName(selectedPatient.demographics?.name)}</div>
                   <div className="text-sm text-muted-foreground">Sample ID: {selectedPatient.sample_id || "-"}</div>
                   <div className="text-sm text-muted-foreground">
-                    Collected by: {selectedPatient.asha_name || selectedPatient.asha_id || selectedPatient.asha_worker_id || "-"}
+                    Collected by: {getAshaDisplayName(selectedPatient)}
                   </div>
                   <div className="text-sm text-muted-foreground">
                     Collected at: {selectedPatient.created_at_offline ? new Date(selectedPatient.created_at_offline).toLocaleString("en-IN") : "-"}

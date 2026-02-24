@@ -8,6 +8,7 @@ import { addUpload } from "@/lib/db"
 import { syncUploads } from "@/lib/sync"
 import { resolveStorageUrl } from "@/lib/storage-utils"
 import { isCompletedStatus, normalizeTriageStatus, triageStatusLabel } from "@/lib/triage-status"
+import { getCachedUserName, resolveUserName } from "@/lib/user-names"
 import { toast } from "sonner"
 import { useRouter } from "next/navigation"
 
@@ -56,6 +57,7 @@ interface LabQueueProps {
 export function LabQueue({ labUid, facilityId }: LabQueueProps) {
   const router = useRouter()
   const [patients, setPatients] = useState<PatientRecord[]>([])
+  const [ashaNameByUid, setAshaNameByUid] = useState<Record<string, string>>({})
   const [reportUrls, setReportUrls] = useState<Record<string, string>>({})
   const [uploadingId, setUploadingId] = useState<string | null>(null)
   const [permissionError, setPermissionError] = useState<string | null>(null)
@@ -181,11 +183,70 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
     })
   }, [ordered, filter, dateFilter, specificDate, minScore])
 
+  const ashaNamesFromRows = useMemo(() => {
+    const map: Record<string, string> = {}
+    patients.forEach((patient) => {
+      const uid = patient.asha_id || patient.asha_worker_id
+      const name = typeof patient.asha_name === "string" ? patient.asha_name.trim() : ""
+      if (uid && name) map[uid] = name
+    })
+    return map
+  }, [patients])
+
+  useEffect(() => {
+    let cancelled = false
+    const resolveMissingAshaNames = async () => {
+      const missingUids = Array.from(
+        new Set(
+          filtered
+            .map((patient) => patient.asha_id || patient.asha_worker_id || "")
+            .filter((uid) => uid)
+            .filter(
+              (uid) =>
+                !ashaNameByUid[uid] &&
+                !filtered.some(
+                  (patient) =>
+                    (patient.asha_id === uid || patient.asha_worker_id === uid) &&
+                    typeof patient.asha_name === "string" &&
+                    patient.asha_name.trim().length > 0
+                )
+            )
+        )
+      )
+
+      if (missingUids.length === 0) return
+
+      const resolved = await Promise.all(
+        missingUids.map(async (uid) => {
+          const cached = getCachedUserName(uid)
+          if (cached) return [uid, cached] as const
+          const name = await resolveUserName(uid)
+          return [uid, name || ""] as const
+        })
+      )
+      if (cancelled) return
+
+      const updates: Record<string, string> = {}
+      for (const [uid, name] of resolved) {
+        if (name) updates[uid] = name
+      }
+      if (Object.keys(updates).length > 0) {
+        setAshaNameByUid((prev) => ({ ...prev, ...updates }))
+      }
+    }
+
+    resolveMissingAshaNames().catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [filtered, ashaNameByUid])
+
   const getAshaUid = (patient: PatientRecord) => patient.asha_id || patient.asha_worker_id || ""
   const getAshaName = (patient: PatientRecord) => {
     const uid = getAshaUid(patient)
+    if (patient.asha_name && patient.asha_name.trim().length > 0) return patient.asha_name
     if (!uid) return "Unknown"
-    return patient.asha_name || `ASHA ${uid.slice(0, 6)}`
+    return ashaNameByUid[uid] || ashaNamesFromRows[uid] || "ASHA Worker"
   }
   const getAshaPhone = (patient: PatientRecord) => {
     return patient.asha_phone_number || "-"

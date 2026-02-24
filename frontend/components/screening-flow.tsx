@@ -90,6 +90,14 @@ const initialRiskFactors: RiskFactorState = {
   historyOfHIV: "no",
 }
 
+function sampleIdFromPatientId(patientId: string): string {
+  let hash = 0
+  for (let i = 0; i < patientId.length; i += 1) {
+    hash = (hash * 31 + patientId.charCodeAt(i)) % 1_000_000
+  }
+  return `TX-${String(hash).padStart(6, "0")}`
+}
+
 export function ScreeningFlow({ ashaId, ashaName, isOnline, onComplete, onBack, gpsLocation }: ScreeningFlowProps) {
   const { t, language } = useLanguage()
   const [step, setStep] = useState(1)
@@ -388,7 +396,7 @@ export function ScreeningFlow({ ashaId, ashaName, isOnline, onComplete, onBack, 
     const result = await submitScreening(screeningData)
 
     // Create new patient
-    const sampleId = `TX-${Math.floor(100 + Math.random() * 900)}`
+    const sampleId = sampleIdFromPatientId(result.patientId)
     const collectedAtIso = new Date().toISOString()
     const riskLevel: RiskLevel = "low"
     const newPatient: Patient = {
@@ -410,7 +418,7 @@ export function ScreeningFlow({ ashaId, ashaName, isOnline, onComplete, onBack, 
       riskLevel,
       aiStatus: "pending",
       status: "awaitingDoctor",
-      distanceToPHC: Math.round(Math.random() * 20 + 2),
+      distanceToPHC: 0,
       needsSync: true,
       testScheduled: false,
       weight: parseFloat(formData.weight) || undefined,

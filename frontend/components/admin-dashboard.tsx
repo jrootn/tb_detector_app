@@ -176,6 +176,24 @@ export function AdminDashboard() {
     return result
   }, [users])
 
+  const ashaNameByUid = useMemo(() => {
+    const map: Record<string, string> = {}
+    users.forEach((u) => {
+      if (u.role !== "ASHA") return
+      if (!u.id || !u.name) return
+      const name = u.name.trim()
+      if (name) map[u.id] = name
+    })
+    return map
+  }, [users])
+
+  const getAshaDisplayName = (patient: PatientRecord): string => {
+    if (patient.asha_name && patient.asha_name.trim().length > 0) return patient.asha_name
+    const uid = patient.asha_id || patient.asha_worker_id
+    if (!uid) return "-"
+    return ashaNameByUid[uid] || "ASHA Worker"
+  }
+
   const filteredPatients = useMemo(() => {
     const now = new Date()
     return patients.filter((p) => {
@@ -627,7 +645,7 @@ export function AdminDashboard() {
                       <td className="p-2">{patient.sample_id || "-"}</td>
                       <td className="p-2">{patient.demographics?.name || "Unknown"}</td>
                       <td className="p-2">{patient.facility_name || patient.facility_id || "-"}</td>
-                      <td className="p-2">{patient.asha_name || patient.asha_id || patient.asha_worker_id || "-"}</td>
+                      <td className="p-2">{getAshaDisplayName(patient)}</td>
                       <td className="p-2">{formatCollectedAt(patient.created_at_offline)}</td>
                       <td className="p-2">{formatRiskDisplay(getAiRiskScore(patient))}</td>
                       <td className="p-2">{triageStatusLabel(patient.status?.triage_status)}</td>
