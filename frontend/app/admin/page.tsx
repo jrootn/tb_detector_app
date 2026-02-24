@@ -26,6 +26,9 @@ export default function AdminPage() {
           router.replace("/login")
           return
         }
+        localStorage.setItem("user_role", "ADMIN")
+        localStorage.setItem("user_uid", user.uid)
+        localStorage.setItem("user_name", snap.data()?.name || "Admin")
         setAdminName(snap.data()?.name || "Admin")
         setReady(true)
       } catch {
@@ -65,6 +68,9 @@ export default function AdminPage() {
             onClick={async () => {
               if (!isOnline) return
               await signOut(auth)
+              localStorage.removeItem("user_role")
+              localStorage.removeItem("user_name")
+              localStorage.removeItem("user_uid")
               router.replace("/login")
             }}
             disabled={!isOnline}

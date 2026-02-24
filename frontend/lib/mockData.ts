@@ -51,6 +51,11 @@ export interface Patient {
     en?: string
     hi?: string
   }
+  aiActionItemsI18n?: {
+    en?: string[]
+    hi?: string[]
+  }
+  doctorInstructions?: string
   
   // Dates
   createdAt: string

@@ -14,7 +14,7 @@ import { Activity, ArrowLeft, ArrowRight, Check, AlertTriangle, Mic, Square } fr
 import { toast } from "sonner"
 import { LanguageSwitcher } from "./language-switcher"
 import { submitScreening, type ScreeningData } from "@/lib/api"
-import { addUpload, assignPendingUploadsToPatient } from "@/lib/db"
+import { assignPendingUploadsToPatient, replacePendingAshaAudioUpload } from "@/lib/db"
 import type { Patient, RiskLevel } from "@/lib/mockData"
 
 interface GPSLocation {
@@ -223,7 +223,7 @@ export function ScreeningFlow({ ashaId, ashaName, isOnline, onComplete, onBack, 
       blob: file,
       createdAt: new Date().toISOString(),
     }
-    await addUpload(upload)
+    await replacePendingAshaAudioUpload(ashaId, upload)
     if (uploadedAudioPreview) {
       URL.revokeObjectURL(uploadedAudioPreview)
     }

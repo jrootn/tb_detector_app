@@ -91,9 +91,13 @@ export function submitScreening(data: ScreeningData): Promise<{ success: boolean
 
     // Simulate API delay
     setTimeout(() => {
+      const uniqueId =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `local-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
       resolve({
         success: true,
-        patientId: `P${Date.now().toString().slice(-6)}`,
+        patientId: `P-${uniqueId}`,
       })
     }, 1000)
   })

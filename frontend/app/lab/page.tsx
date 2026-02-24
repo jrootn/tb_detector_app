@@ -30,6 +30,9 @@ export default function LabPage() {
           router.replace("/login")
           return
         }
+        localStorage.setItem("user_role", "LAB_TECH")
+        localStorage.setItem("user_uid", user.uid)
+        localStorage.setItem("user_name", snap.data()?.name || "Lab")
         setLabName(snap.data()?.name || "Lab")
         setLabUid(user.uid)
         setLabFacilityId(snap.data()?.facility_id || snap.data()?.assigned_center || "")
@@ -76,6 +79,9 @@ export default function LabPage() {
             onClick={async () => {
               if (!isOnline) return
               await signOut(auth)
+              localStorage.removeItem("user_role")
+              localStorage.removeItem("user_name")
+              localStorage.removeItem("user_uid")
               router.replace("/login")
             }}
             disabled={!isOnline}

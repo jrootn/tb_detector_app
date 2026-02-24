@@ -40,6 +40,15 @@ function sortPatientsForQueue(patients: Patient[]) {
   })
 }
 
+function withCollectorName(patients: Patient[], ashaId?: string, ashaName?: string) {
+  if (!ashaId || !ashaName) return patients
+  return patients.map((patient) => {
+    if (patient.ashaName) return patient
+    if (patient.ashaId && patient.ashaId !== ashaId) return patient
+    return { ...patient, ashaId, ashaName }
+  })
+}
+
 export function AppShell({
   initialScreen = "login",
   initialAshaId = "",
@@ -138,7 +147,7 @@ export function AppShell({
         const scoped = stored.map((patient) =>
           initialAshaId && !patient.ashaId && patient.needsSync ? { ...patient, ashaId: initialAshaId } : patient
         )
-        const ordered = sortPatientsForQueue(scoped)
+        const ordered = sortPatientsForQueue(withCollectorName(scoped, initialAshaId, initialAshaName))
         if (isMounted) setPatients(ordered)
         const pendingCount = await getPendingUploadCount(initialAshaId || undefined)
         if (isMounted) setPendingUploads(pendingCount)
@@ -153,38 +162,44 @@ export function AppShell({
     return () => {
       isMounted = false
     }
-  }, [enableMockSeed, initialAshaId])
+  }, [enableMockSeed, initialAshaId, initialAshaName])
 
   // Refresh from IndexedDB after sync completes
   useEffect(() => {
-    const handler = async () => {
+    const refreshLocal = async () => {
       const stored = await getPatientsForAsha(ashaId || undefined)
-      const ordered = sortPatientsForQueue(stored)
+      const ordered = sortPatientsForQueue(withCollectorName(stored, ashaId, ashaName))
       setPatients(ordered)
       const pendingCount = await getPendingUploadCount(ashaId || undefined)
       setPendingUploads(pendingCount)
     }
 
-    window.addEventListener("sync:complete", handler)
-    return () => {
-      window.removeEventListener("sync:complete", handler)
+    const syncCompleteHandler = () => void refreshLocal()
+    const storageHandler = (event: StorageEvent) => {
+      if (event.key === "tb_last_sync_at" || event.key === "tb_local_patients_updated_at") {
+        void refreshLocal()
+      }
     }
-  }, [ashaId])
+
+    window.addEventListener("sync:complete", syncCompleteHandler)
+    window.addEventListener("storage", storageHandler)
+    return () => {
+      window.removeEventListener("sync:complete", syncCompleteHandler)
+      window.removeEventListener("storage", storageHandler)
+    }
+  }, [ashaId, ashaName])
 
   // When back online, refresh local cache to clear stale sync flags
   useEffect(() => {
     if (!dbReady || !isOnline) return
-    getPatientsForAsha(ashaId || undefined)
-      .then((stored) => setPatients(sortPatientsForQueue(stored)))
-      .catch(() => undefined)
     Promise.all([getPatientsForAsha(ashaId || undefined), getPendingUploadCount(ashaId || undefined)])
       .then(([stored, pendingCount]) => {
-        const ordered = sortPatientsForQueue(stored)
+        const ordered = sortPatientsForQueue(withCollectorName(stored, ashaId, ashaName))
         setPatients(ordered)
         setPendingUploads(pendingCount)
       })
       .catch(() => undefined)
-  }, [dbReady, isOnline])
+  }, [dbReady, isOnline, ashaId, ashaName])
 
   // Periodic foreground sync keeps ASHA risk/status cards aligned with backend AI updates.
   useEffect(() => {
@@ -250,15 +265,16 @@ export function AppShell({
   }, [ashaId])
 
   const handleScreeningComplete = useCallback((newPatient: Patient) => {
-    const next = newPatient.ashaId ? newPatient : { ...newPatient, ashaId }
+    const next = newPatient.ashaId ? newPatient : { ...newPatient, ashaId, ashaName }
     setPatients((prev) => sortPatientsForQueue([next, ...prev]))
+    localStorage.setItem("tb_local_patients_updated_at", String(Date.now()))
     if (navigator.onLine) {
       syncData().catch((error) => {
         console.warn("Auto-sync after screening failed", error)
       })
     }
     setCurrentScreen("dashboard")
-  }, [ashaId])
+  }, [ashaId, ashaName])
 
   return (
     <LanguageProvider>

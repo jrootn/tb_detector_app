@@ -28,6 +28,10 @@ class AppDatabase extends Dexie {
       patients: "id,riskLevel,createdAt,collectionDate",
       uploads: "id,patientId,role,kind,createdAt",
     })
+    this.version(3).stores({
+      patients: "id,ashaId,needsSync,riskLevel,createdAt,collectionDate",
+      uploads: "id,ownerUid,patientId,role,kind,createdAt",
+    })
   }
 }
 
@@ -51,10 +55,8 @@ export async function seedPatientsIfEmpty(patients: PatientRecord[]) {
 }
 
 export async function savePatients(patients: PatientRecord[]) {
-  await db.transaction("rw", db.patients, async () => {
-    await db.patients.clear()
-    await db.patients.bulkPut(patients)
-  })
+  if (patients.length === 0) return
+  await db.patients.bulkPut(patients)
 }
 
 export async function upsertPatient(patient: PatientRecord) {
@@ -63,6 +65,21 @@ export async function upsertPatient(patient: PatientRecord) {
 
 export async function addUpload(upload: UploadRecord) {
   await db.uploads.put(upload)
+}
+
+export async function replacePendingAshaAudioUpload(ownerUid: string, upload: UploadRecord) {
+  await db.transaction("rw", db.uploads, async () => {
+    const stale = await db.uploads.where("ownerUid").equals(ownerUid).toArray()
+    const staleIds = stale
+      .filter((entry) => entry.patientId === "pending" && entry.role === "ASHA" && entry.kind === "audio")
+      .map((entry) => entry.id)
+
+    if (staleIds.length > 0) {
+      await Promise.all(staleIds.map((id) => db.uploads.delete(id)))
+    }
+
+    await db.uploads.put(upload)
+  })
 }
 
 export async function assignPendingUploadsToPatient(patientId: string, ownerUid?: string) {
@@ -79,11 +96,24 @@ export async function getPendingUploads(ownerUid?: string) {
   return all.filter((upload) => upload.ownerUid === ownerUid)
 }
 
+export async function cleanupOrphanUploads(ownerUid?: string) {
+  const uploads = await getPendingUploads(ownerUid)
+  const validPatientIds = new Set((await db.patients.toArray()).map((patient) => patient.id))
+  const orphanIds = uploads
+    .filter((upload) => upload.patientId !== "pending" && !validPatientIds.has(upload.patientId))
+    .map((upload) => upload.id)
+
+  if (orphanIds.length > 0) {
+    await Promise.all(orphanIds.map((id) => db.uploads.delete(id)))
+  }
+}
+
 export async function removeUpload(id: string) {
   await db.uploads.delete(id)
 }
 
 export async function getPendingUploadCount(ownerUid?: string) {
+  await cleanupOrphanUploads(ownerUid)
   const uploads = await getPendingUploads(ownerUid)
   return uploads.filter((upload) => upload.patientId !== "pending").length
 }

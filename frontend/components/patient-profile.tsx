@@ -135,12 +135,24 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
   const aiReady =
     patient.aiStatus === "success" ||
     Boolean(patient.medGemmaReasoning || patient.medGemmaReasoningI18n?.en || patient.medGemmaReasoningI18n?.hi || patient.hearAudioScore != null)
+  const collectorDisplayName = (() => {
+    if (patient.ashaName) return patient.ashaName
+    if (typeof window !== "undefined") {
+      const localCollectorName = localStorage.getItem("user_name")
+      if (localCollectorName) return localCollectorName
+    }
+    return patient.ashaId || "-"
+  })()
   const collectedAtLabel = (() => {
     const raw = patient.collectedAt || patient.createdAt
     if (!raw) return "-"
     const d = new Date(raw)
     if (Number.isNaN(d.getTime())) return raw
     return d.toLocaleString(language === "en" ? "en-IN" : "hi-IN")
+  })()
+  const aiActionItems = (() => {
+    const items = language === "hi" ? patient.aiActionItemsI18n?.hi || patient.aiActionItemsI18n?.en : patient.aiActionItemsI18n?.en || patient.aiActionItemsI18n?.hi
+    return Array.isArray(items) ? items.filter(Boolean) : []
   })()
   
   const stages = [
@@ -229,8 +241,8 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
             </p>
           </div>
         </div>
-        <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-          <p>{language === "en" ? "Collected by" : "नमूना संग्रहकर्ता"}: {patient.ashaName || patient.ashaId || "-"}</p>
+        <div className="mt-3 grid grid-cols-1 gap-1.5 text-sm text-muted-foreground sm:grid-cols-2">
+          <p>{language === "en" ? "Collected by" : "नमूना संग्रहकर्ता"}: {collectorDisplayName}</p>
           <p>{language === "en" ? "Collected at" : "संग्रह समय"}: {collectedAtLabel}</p>
         </div>
 
@@ -472,19 +484,46 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
                     : "नमूना संग्रह के तुरंत बाद ये सावधानियां शुरू करें। एआई का इंतजार न करें।"}
                 </div>
                 <ul className="space-y-3">
-                  {[
-                    { icon: CheckCircle2, text: t.isolateFromChildren },
-                    { icon: CheckCircle2, text: t.wearMask },
-                    { icon: CheckCircle2, text: t.ventilateRoom },
-                  ].map((instruction, index) => (
-                    <li key={index} className="flex items-start gap-3">
-                      <instruction.icon className="h-5 w-5 text-emerald-600 mt-0.5 shrink-0" />
-                      <span className="text-sm">{instruction.text}</span>
-                    </li>
-                  ))}
+                  {aiActionItems.length > 0
+                    ? aiActionItems.map((text, index) => (
+                        <li key={`${text}-${index}`} className="flex items-start gap-3">
+                          <CheckCircle2 className="h-5 w-5 text-emerald-600 mt-0.5 shrink-0" />
+                          <span className="text-sm">{text}</span>
+                        </li>
+                      ))
+                    : [
+                        { text: t.isolateFromChildren },
+                        { text: t.wearMask },
+                        { text: t.ventilateRoom },
+                      ].map((instruction, index) => (
+                        <li key={index} className="flex items-start gap-3">
+                          <CheckCircle2 className="h-5 w-5 text-emerald-600 mt-0.5 shrink-0" />
+                          <span className="text-sm">{instruction.text}</span>
+                        </li>
+                      ))}
                 </ul>
               </CardContent>
             </Card>
+
+            {patient.doctorInstructions && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">
+                    {language === "en" ? "Doctor Instructions" : "डॉक्टर के निर्देश"}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="mb-2 rounded-md border bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    {language === "en"
+                      ? "Top priority: follow doctor instructions first."
+                      : "सर्वोच्च प्राथमिकता: पहले डॉक्टर के निर्देशों का पालन करें।"}
+                  </div>
+                  <p className="text-sm leading-relaxed text-foreground bg-muted/50 p-3 rounded-lg border">
+                    {patient.doctorInstructions}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
 
             <Card>
               <CardHeader className="pb-2">

@@ -1,4 +1,4 @@
-import { getPatientsForAsha, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
+import { cleanupOrphanUploads, getPatientsForAsha, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
 import type { Patient } from "@/lib/mockData"
 import { auth, db, storage } from "@/lib/firebase"
 import { normalizeAiRiskScore } from "@/lib/ai"
@@ -217,6 +217,30 @@ function parseLocalizedSummary(ai: Record<string, unknown>): { en?: string; hi?:
   return result
 }
 
+function parseLocalizedActions(ai: Record<string, unknown>): { en?: string[]; hi?: string[] } {
+  const result: { en?: string[]; hi?: string[] } = {}
+  const direct = ai.action_items_i18n
+
+  const normalizeList = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined
+    const items = value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+    return items.length > 0 ? items : undefined
+  }
+
+  if (direct && typeof direct === "object") {
+    const map = direct as Record<string, unknown>
+    result.en = normalizeList(map.en) || result.en
+    result.hi = normalizeList(map.hi) || result.hi
+  }
+
+  result.en = normalizeList(ai.action_items_en) || result.en
+  result.hi = normalizeList(ai.action_items_hi) || result.hi
+  return result
+}
+
 function mapRiskAnswerToApi(value?: Patient["nightSweats"]): string | null {
   switch (value) {
     case "yes":
@@ -391,6 +415,7 @@ function mapFirestorePatientToLocal(
   const status = (data.status || {}) as Record<string, unknown>
 
   const localizedSummary = parseLocalizedSummary(ai)
+  const localizedActions = parseLocalizedActions(ai)
   const hasAiRiskScore = typeof ai.risk_score === "number" || Number.isFinite(Number(ai.risk_score))
   const riskScore = hasAiRiskScore ? normalizeAiRiskScore(ai.risk_score, 0) : 0
   const riskLevelRaw = typeof ai.risk_level === "string" ? ai.risk_level.toUpperCase() : ""
@@ -499,6 +524,11 @@ function mapFirestorePatientToLocal(
     hearAudioScore: typeof ai.hear_score === "number" ? ai.hear_score : existing?.hearAudioScore,
     medGemmaReasoning: summaryEn,
     medGemmaReasoningI18n: summaryEn || summaryHi ? { en: summaryEn, hi: summaryHi } : existing?.medGemmaReasoningI18n,
+    aiActionItemsI18n:
+      localizedActions.en || localizedActions.hi
+        ? { en: localizedActions.en, hi: localizedActions.hi }
+        : existing?.aiActionItemsI18n,
+    doctorInstructions: typeof data.doctor_instructions === "string" ? data.doctor_instructions : existing?.doctorInstructions,
     createdAt: toIsoTimestamp(collectedAtSource),
     collectedAt: toIsoTimestamp(collectedAtSource),
     collectionDate: toDateOnly(collectedAtSource),
@@ -517,10 +547,17 @@ async function refreshLocalPatientsFromFirestore(
   try {
     const localForAsha = localPatients.filter((p) => !p.ashaId || p.ashaId === ashaWorkerId)
     const existingById = new Map(localForAsha.map((p) => [p.id, p]))
-    const snap = await getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId)))
-    if (snap.empty) return null
+    const [snapByAshaId, snapByWorkerId] = await Promise.all([
+      getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId))),
+      getDocs(query(collection(db, "patients"), where("asha_worker_id", "==", ashaWorkerId))),
+    ])
 
-    const remote = snap.docs.map((docSnap) =>
+    const mergedDocs = [...snapByAshaId.docs, ...snapByWorkerId.docs]
+    if (mergedDocs.length === 0) return null
+
+    const uniqueDocs = Array.from(new Map(mergedDocs.map((docSnap) => [docSnap.id, docSnap])).values())
+
+    const remote = uniqueDocs.map((docSnap) =>
       mapFirestorePatientToLocal(docSnap.id, docSnap.data() as Record<string, unknown>, existingById.get(docSnap.id))
     )
     const remoteIds = new Set(remote.map((p) => p.id))
@@ -597,18 +634,26 @@ async function syncPatientsDirectToFirestore(
 export async function syncData(options: { uploadsOnly?: boolean } = {}) {
   if (!navigator.onLine) return
 
-    const currentUser = auth.currentUser
-    if (!currentUser) return
+  const currentUser = auth.currentUser
+  if (!currentUser) return
 
-    try {
-      const idToken = await currentUser.getIdToken()
-      const assignment = await resolveAssignmentContext(currentUser.uid)
-      const patients = await getPatientsForAsha(currentUser.uid)
-      const pending = patients.filter((p) => p.needsSync)
-      const records = pending.map((p) => mapPatientToSyncRecord(p, currentUser.uid, assignment))
-      const syncedIds = new Set<string>()
+  try {
+    if (options.uploadsOnly) {
+      await syncUploads(currentUser.uid)
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("sync:complete"))
+      }
+      return
+    }
 
-    if (!options.uploadsOnly && records.length > 0) {
+    const idToken = await currentUser.getIdToken()
+    const assignment = await resolveAssignmentContext(currentUser.uid)
+    const patients = await getPatientsForAsha(currentUser.uid)
+    const pending = patients.filter((p) => p.needsSync)
+    const records = pending.map((p) => mapPatientToSyncRecord(p, currentUser.uid, assignment))
+    const syncedIds = new Set<string>()
+
+    if (records.length > 0) {
       let syncedViaBackend = false
       try {
         const aborter = new AbortController()
@@ -650,7 +695,18 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
       }
     }
 
-    await syncUploads(currentUser.uid)
+    const uploadResult = await syncUploads(currentUser.uid)
+    if (uploadResult.failed > 0) {
+      const pendingUploads = (await getPendingUploads(currentUser.uid)).filter((upload) => upload.patientId !== "pending")
+      if (pendingUploads.length > 0) {
+        const pendingPatientIds = new Set(pendingUploads.map((upload) => upload.patientId))
+        const localPatients = await getPatientsForAsha(currentUser.uid)
+        const patched = localPatients.map((patient) =>
+          pendingPatientIds.has(patient.id) ? { ...patient, needsSync: true } : patient
+        )
+        await savePatients(patched)
+      }
+    }
 
     const localAfterSync = await getPatientsForAsha(currentUser.uid)
     const refreshed = await refreshLocalPatientsFromFirestore(currentUser.uid, localAfterSync)
@@ -660,6 +716,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
 
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("sync:complete"))
+      localStorage.setItem("tb_last_sync_at", String(Date.now()))
     }
   } catch (error) {
     console.warn("Sync failed", error)
@@ -668,6 +725,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
 
 export async function syncUploads(userId: string, options: UploadSyncOptions = {}): Promise<UploadSyncResult> {
   if (!navigator.onLine) return { uploaded: 0, failed: 0, errors: [] }
+  await cleanupOrphanUploads(userId)
   const currentRole = (typeof window !== "undefined" ? localStorage.getItem("user_role") : null) as AppRole | null
   const uploads = (await getPendingUploads(userId)).filter((upload) => {
     if (upload.patientId === "pending") return false

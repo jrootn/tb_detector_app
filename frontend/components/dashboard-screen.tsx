@@ -178,7 +178,7 @@ export function DashboardScreen({
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
             <Activity className="h-5 w-5 text-primary-foreground" />
           </div>
-          <span className="text-base font-semibold text-foreground sm:text-lg">{t.appName}</span>
+          <span className="text-lg font-semibold text-foreground sm:text-xl">{t.appName}</span>
         </div>
         <div className="flex items-center gap-2">
           <LanguageSwitcher />
@@ -228,10 +228,10 @@ export function DashboardScreen({
       <div className="bg-primary text-primary-foreground px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-base font-semibold opacity-95">
+            <p className="text-lg font-semibold opacity-95">
               {t.welcome}, {ashaName || ashaId || (language === "en" ? "ASHA Worker" : "आशा कार्यकर्ता")}
             </p>
-            <p className="flex items-center gap-1.5 text-xs opacity-75">
+            <p className="flex items-center gap-1.5 text-sm opacity-80">
               <MapPin className="h-3.5 w-3.5" />
               {gpsLocation.latitude && gpsLocation.longitude
                 ? `${gpsLocation.latitude.toFixed(4)}, ${gpsLocation.longitude.toFixed(4)}`
@@ -263,7 +263,7 @@ export function DashboardScreen({
             onClick={onViewPriority}
           >
             <CardHeader className="p-3 pb-1">
-              <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
                 {t.highRiskPatients}
               </CardTitle>
@@ -279,7 +279,7 @@ export function DashboardScreen({
               onClick={() => setFilter("needsSync")}
             >
               <CardHeader className="p-3 pb-1">
-                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
                   <RefreshCw className="h-3.5 w-3.5 text-amber-500" />
                   {t.pendingUploads}
                 </CardTitle>
@@ -291,7 +291,7 @@ export function DashboardScreen({
           ) : (
             <Card className="border-l-4 border-l-emerald-500">
               <CardHeader className="p-3 pb-1">
-                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
                   {language === "en" ? "All Synced" : "सभी सिंक हो चुके हैं"}
                 </CardTitle>
