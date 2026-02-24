@@ -60,6 +60,28 @@ export async function savePatients(patients: PatientRecord[]) {
   await db.patients.bulkPut(patients)
 }
 
+export async function replacePatientsForAsha(ashaId: string, patients: PatientRecord[]) {
+  const normalized = patients.map((patient) =>
+    patient.ashaId ? patient : { ...patient, ashaId }
+  )
+  const incomingIds = new Set(normalized.map((patient) => patient.id))
+
+  await db.transaction("rw", db.patients, async () => {
+    const existing = await db.patients.where("ashaId").equals(ashaId).toArray()
+    const staleIds = existing
+      .filter((patient) => !incomingIds.has(patient.id))
+      .map((patient) => patient.id)
+
+    if (staleIds.length > 0) {
+      await Promise.all(staleIds.map((id) => db.patients.delete(id)))
+    }
+
+    if (normalized.length > 0) {
+      await db.patients.bulkPut(normalized)
+    }
+  })
+}
+
 export async function upsertPatient(patient: PatientRecord) {
   await db.patients.put(patient)
 }
@@ -100,8 +122,19 @@ export async function getPendingUploads(ownerUid?: string) {
 export async function cleanupOrphanUploads(ownerUid?: string) {
   const uploads = await getPendingUploads(ownerUid)
   const validPatientIds = new Set((await db.patients.toArray()).map((patient) => patient.id))
+  const now = Date.now()
+  const orphanGraceMs = 10 * 60 * 1000
   const orphanIds = uploads
-    .filter((upload) => upload.patientId !== "pending" && !validPatientIds.has(upload.patientId))
+    .filter((upload) => {
+      if (upload.patientId === "pending") return false
+      if (validPatientIds.has(upload.patientId)) return false
+      const createdAtMs = new Date(upload.createdAt).getTime()
+      if (Number.isFinite(createdAtMs) && now - createdAtMs < orphanGraceMs) {
+        // Avoid dropping fresh uploads while the corresponding patient row is still being persisted.
+        return false
+      }
+      return true
+    })
     .map((upload) => upload.id)
 
   if (orphanIds.length > 0) {

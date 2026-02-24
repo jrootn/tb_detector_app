@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { useLanguage } from "@/lib/language-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -128,6 +128,13 @@ export function DashboardScreen({
   const hasAnyPatients = patients.length > 0
   const isFilterConstrained = filter !== "all" || Boolean(dateFilter)
   const showFilterEmptyState = filteredPatients.length === 0 && hasAnyPatients && isFilterConstrained
+
+  useEffect(() => {
+    // Auto-reset stale "needs sync" filter once queue is drained online.
+    if (filter === "needsSync" && isOnline && !hasPendingSync) {
+      setFilter("all")
+    }
+  }, [filter, isOnline, hasPendingSync])
 
   const handleLogoutClick = () => {
     if (!isOnline) {

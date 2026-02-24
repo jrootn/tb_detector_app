@@ -1,8 +1,28 @@
-import { db as localDb, cleanupOrphanUploads, getPatientsForAsha, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
+import {
+  db as localDb,
+  cleanupOrphanUploads,
+  getPatientsForAsha,
+  savePatients,
+  getPendingUploads,
+  removeUpload,
+  replacePatientsForAsha,
+} from "@/lib/db"
 import type { Patient } from "@/lib/mockData"
 import { auth, db, storage } from "@/lib/firebase"
 import { normalizeAiRiskScore } from "@/lib/ai"
-import { doc, updateDoc, arrayUnion, setDoc, getDoc, collection, getDocs, query, where } from "firebase/firestore"
+import {
+  doc,
+  updateDoc,
+  arrayUnion,
+  setDoc,
+  getDoc,
+  collection,
+  getDocs,
+  query,
+  where,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+} from "firebase/firestore"
 import { ref, uploadBytes } from "firebase/storage"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
@@ -599,15 +619,31 @@ async function refreshLocalPatientsFromFirestore(
         .map((upload) => upload.patientId)
     )
     const existingById = new Map(localForAsha.map((p) => [p.id, p]))
-    const [snapByAshaId, snapByWorkerId] = await Promise.all([
-      getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId))),
-      getDocs(query(collection(db, "patients"), where("asha_worker_id", "==", ashaWorkerId))),
-    ])
+    const docById = new Map<string, QueryDocumentSnapshot<DocumentData>>()
+    let querySnapshot: Awaited<ReturnType<typeof getDocs>>
 
-    const mergedDocs = [...snapByAshaId.docs, ...snapByWorkerId.docs]
-    if (mergedDocs.length === 0) return null
+    try {
+      querySnapshot = await getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId)))
+      querySnapshot.docs.forEach((docSnap) => {
+        docById.set(docSnap.id, docSnap)
+      })
+    } catch (error) {
+      console.warn("Could not query patients by asha_id", error)
+    }
 
-    const uniqueDocs = Array.from(new Map(mergedDocs.map((docSnap) => [docSnap.id, docSnap])).values())
+    try {
+      querySnapshot = await getDocs(query(collection(db, "patients"), where("asha_worker_id", "==", ashaWorkerId)))
+      querySnapshot.docs.forEach((docSnap) => {
+        docById.set(docSnap.id, docSnap)
+      })
+    } catch (error) {
+      if (getErrorCode(error) !== "permission-denied") {
+        console.warn("Could not query patients by asha_worker_id", error)
+      }
+    }
+
+    const uniqueDocs = Array.from(docById.values())
+    if (uniqueDocs.length === 0) return null
 
     const remote = uniqueDocs.map((docSnap) =>
       mapFirestorePatientToLocal(docSnap.id, docSnap.data() as Record<string, unknown>, existingById.get(docSnap.id))
@@ -641,7 +677,7 @@ export async function hydrateAshaPatientsFromCloud(ashaWorkerId: string): Promis
   const local = await getPatientsForAsha(ashaWorkerId)
   const refreshed = await refreshLocalPatientsFromFirestore(ashaWorkerId, local)
   if (refreshed && refreshed.length > 0) {
-    await savePatients(refreshed)
+    await replacePatientsForAsha(ashaWorkerId, refreshed)
     return refreshed
   }
   return local
@@ -857,16 +893,17 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
         )
         const existsRemote = new Set(existsChecks.filter(([, exists]) => exists).map(([id]) => id))
         if (existsRemote.size > 0) {
-          await savePatients(
+          await replacePatientsForAsha(
+            currentUser.uid,
             baselineLocal.map((patient) =>
               existsRemote.has(patient.id) ? { ...patient, needsSync: false } : patient
             )
           )
         } else {
-          await savePatients(baselineLocal)
+          await replacePatientsForAsha(currentUser.uid, baselineLocal)
         }
       } else {
-        await savePatients(baselineLocal)
+        await replacePatientsForAsha(currentUser.uid, baselineLocal)
       }
     }
 
