@@ -327,7 +327,33 @@ frontend/
 </details>
 
 <details open>
-<summary><strong>13) References (Program + Policy Context)</strong></summary>
+<summary><strong>13) Model Training Provenance (CODA-TB + Kaggle)</strong></summary>
+
+Training artifacts and notebook history are tracked in:
+- `research/model-training-notebooks/README.md`
+- `research/model-training-notebooks/V10_FINAL_BLOCK_AND_RESULTS.md`
+
+This folder includes:
+- raw trial-and-error notebooks,
+- final V10 training summary,
+- reported fold metrics,
+- deployment artifact manifest,
+- CODA-TB/HeAR input-length limitation notes and mitigation strategy.
+
+### Reported V10 fold performance
+- Fold AUCs: `0.8364, 0.8297, 0.7926, 0.7877, 0.7427`
+- Fold pAUC@90%: `0.9681, 0.9682, 0.9815, 0.9619, 0.9480`
+- Mean AUC: `0.7978`
+- Mean pAUC@90%: `0.9655`
+
+### CODA-TB constraint acknowledged
+HeAR requires fixed 2-second windows, but CODA cough clips are variable length and frequently shorter than this requirement.  
+Our training pipeline handled this with mirror+tile padding, overlapping multi-window extraction, and participant-level embedding aggregation.
+
+</details>
+
+<details open>
+<summary><strong>14) References (Program + Policy Context)</strong></summary>
 
 - WHO: Tuberculosis fact sheet and global burden updates  
   https://www.who.int/news-room/fact-sheets/detail/tuberculosis
