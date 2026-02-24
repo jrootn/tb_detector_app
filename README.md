@@ -7,18 +7,47 @@ AI-assisted TB screening and triage for ASHA-centered field workflows, with real
 - Backend inference service: private Cloud Run (`tb-inference`) invoked through Cloud Tasks + OIDC.
 
 ## Reviewer Accounts (Competition Demo)
-All seeded demo accounts use password: `password123`
+Use these 3 accounts for role-based evaluation.  
+Password for all three: `password123`
 
 | Role | Email | Purpose |
 |---|---|---|
 | ASHA | `sunita.asha@indiatb.gov` | Field screening + offline collection |
 | Doctor | `aditi.doctor@indiatb.gov` | Clinical review + queue prioritization |
 | Admin (Control Tower) | `suresh.sts@indiatb.gov` | District/TU monitoring, operations, analytics |
-| Lab (optional) | `rohan.lab@indiatb.gov` | Lab queue + report uploads |
 
 Use `/login` and sign in with one account at a time.
 
 ---
+
+<details open>
+<summary><strong>0) Judge Walkthrough (5-8 Minutes)</strong></summary>
+
+### What judges should know first
+- This is an offline-first TB triage stack: ASHA can collect data offline, backend inference runs asynchronously, and dashboards update from Firestore.
+- Real AI outputs are written under `ai.*` fields only.
+- First inference after idle can be slower (cold start + heavy model load); subsequent requests are faster.
+
+### Quick demo sequence
+1. Open the live app: `https://tb-frontend-7z7c3myqlq-uk.a.run.app`
+2. Login as ASHA: `sunita.asha@indiatb.gov` / `password123`
+3. Create one screening (or open existing high-risk patients in ASHA dashboard).
+4. Wait for backend processing (typically seconds to a few minutes; cold start can be longer).
+5. Logout and login as Doctor: `aditi.doctor@indiatb.gov` / `password123`
+6. Show ranked queue, risk score, and AI summary on doctor side.
+7. Logout and login as Admin: `suresh.sts@indiatb.gov` / `password123`
+8. Show Control Tower analytics, risk distribution, and facility-level operations.
+
+### Optional validation checks (for judges)
+- Confirm AI bilingual summary fields exist: `ai.medgemini_summary_en`, `ai.medgemini_summary_hi`.
+- Confirm workflow status progression and role-based visibility.
+- Confirm no non-AI fields are overwritten by inference.
+
+### Role switch tip
+- Use one role at a time in the same browser session.
+- If role routing appears cached, logout and sign in again (or open a private window for each role).
+
+</details>
 
 <details open>
 <summary><strong>1) Problem Statement</strong></summary>
@@ -333,4 +362,3 @@ This submission is intentionally built around production constraints:
 - and India-aligned operational workflow semantics.
 
 No dummy AI summaries/actions are used in the current pipeline.
-
