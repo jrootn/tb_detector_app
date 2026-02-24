@@ -37,6 +37,12 @@ export async function getAllPatients() {
   return db.patients.toArray()
 }
 
+export async function getPatientsForAsha(ashaId?: string) {
+  const all = await db.patients.toArray()
+  if (!ashaId) return all
+  return all.filter((patient) => !patient.ashaId || patient.ashaId === ashaId)
+}
+
 export async function seedPatientsIfEmpty(patients: PatientRecord[]) {
   const count = await db.patients.count()
   if (count === 0) {

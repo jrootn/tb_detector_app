@@ -110,7 +110,13 @@ export function DashboardScreen({
       filtered = filtered.filter((patient) => patient.collectionDate === dateFilter)
     }
 
-    return filtered
+    return [...filtered].sort((a, b) => {
+      if (b.riskScore !== a.riskScore) return b.riskScore - a.riskScore
+      const aTime = new Date(a.collectionDate || a.createdAt).getTime()
+      const bTime = new Date(b.collectionDate || b.createdAt).getTime()
+      if (aTime !== bTime) return aTime - bTime
+      return a.id.localeCompare(b.id)
+    })
   }, [patients, filter, dateFilter])
 
   const handleLogoutClick = () => {
@@ -156,6 +162,8 @@ export function DashboardScreen({
     }
   }
 
+  const formatScore = (score: number) => `${score.toFixed(1)} / 10 (${Math.round(score * 10)}%)`
+
   // Get unique dates from patients for date filter
   const uniqueDates = useMemo(() => {
     const dates = [...new Set(patients.map((p) => p.collectionDate))]
@@ -170,7 +178,7 @@ export function DashboardScreen({
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
             <Activity className="h-5 w-5 text-primary-foreground" />
           </div>
-          <span className="font-semibold text-foreground hidden sm:block">{t.appName}</span>
+          <span className="text-base font-semibold text-foreground sm:text-lg">{t.appName}</span>
         </div>
         <div className="flex items-center gap-2">
           <LanguageSwitcher />
@@ -220,7 +228,7 @@ export function DashboardScreen({
       <div className="bg-primary text-primary-foreground px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-sm opacity-90">
+            <p className="text-base font-semibold opacity-95">
               {t.welcome}, {ashaName || ashaId || (language === "en" ? "ASHA Worker" : "आशा कार्यकर्ता")}
             </p>
             <p className="flex items-center gap-1.5 text-xs opacity-75">
@@ -314,6 +322,11 @@ export function DashboardScreen({
         <Card>
           <CardHeader className="p-4 pb-2">
             <CardTitle className="text-lg font-semibold">{t.patientList}</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              {language === "en"
+                ? "Ranking: higher score first (0-10 scale). If score ties, earlier collected patient stays ahead."
+                : "रैंकिंग: उच्च स्कोर पहले (0-10 स्केल)। समान स्कोर पर पहले संग्रहित मरीज आगे रहेगा।"}
+            </p>
             {/* Filters */}
             <div className="space-y-3 pt-2">
               {/* Status Filters */}
@@ -367,7 +380,7 @@ export function DashboardScreen({
           </CardHeader>
           <CardContent className="p-0">
             <div className="space-y-2 p-3 md:hidden">
-              {filteredPatients.map((patient) => (
+              {filteredPatients.map((patient, index) => (
                 <button
                   key={patient.id}
                   type="button"
@@ -382,10 +395,15 @@ export function DashboardScreen({
                     <Badge className={getRiskBadgeStyle(patient.riskLevel)}>{getRiskLabel(patient.riskLevel)}</Badge>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                    <div>{language === "en" ? patient.village : patient.villageHi}</div>
+                    <div>
+                      #{index + 1} • {language === "en" ? patient.village : patient.villageHi}
+                    </div>
                     <div className="text-right">{new Date(patient.collectionDate).toLocaleDateString(language === "en" ? "en-IN" : "hi-IN")}</div>
                   </div>
-                  <div className="mt-2 text-xs text-muted-foreground">{getStatusLabel(patient.status)}</div>
+                  <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>{getStatusLabel(patient.status)}</span>
+                    <span className="font-medium text-foreground">{formatScore(patient.riskScore)}</span>
+                  </div>
                 </button>
               ))}
               {filteredPatients.length === 0 && (
@@ -398,6 +416,7 @@ export function DashboardScreen({
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="font-semibold">Rank</TableHead>
                     <TableHead className="font-semibold">{t.name}</TableHead>
                     <TableHead className="font-semibold">Sample ID</TableHead>
                     <TableHead className="font-semibold">{t.village}</TableHead>
@@ -407,12 +426,13 @@ export function DashboardScreen({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredPatients.map((patient) => (
+                  {filteredPatients.map((patient, index) => (
                     <TableRow
                       key={patient.id}
                       className="cursor-pointer hover:bg-muted/50"
                       onClick={() => onViewPatient(patient)}
                     >
+                      <TableCell className="font-semibold">{index + 1}</TableCell>
                       <TableCell className="font-medium">
                         {language === "en" ? patient.name : patient.nameHi}
                       </TableCell>
@@ -428,9 +448,10 @@ export function DashboardScreen({
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge className={getRiskBadgeStyle(patient.riskLevel)}>
-                          {getRiskLabel(patient.riskLevel)}
-                        </Badge>
+                        <div className="flex flex-col gap-1">
+                          <Badge className={getRiskBadgeStyle(patient.riskLevel)}>{getRiskLabel(patient.riskLevel)}</Badge>
+                          <span className="text-xs text-muted-foreground">{formatScore(patient.riskScore)}</span>
+                        </div>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {getStatusLabel(patient.status)}
@@ -439,7 +460,7 @@ export function DashboardScreen({
                   ))}
                   {filteredPatients.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                         {language === "en" ? "No patients found" : "कोई मरीज़ नहीं मिला"}
                       </TableCell>
                     </TableRow>
@@ -456,10 +477,10 @@ export function DashboardScreen({
         <Button
           onClick={onNewScreening}
           size="lg"
-          className="h-14 w-14 rounded-full shadow-lg hover:shadow-xl transition-shadow bg-emerald-600 hover:bg-emerald-700"
+          className="h-14 rounded-full px-5 shadow-lg hover:shadow-xl transition-shadow bg-emerald-600 hover:bg-emerald-700 gap-2 text-base font-semibold"
         >
-          <Plus className="h-6 w-6" />
-          <span className="sr-only">{t.newScreening}</span>
+          <Plus className="h-7 w-7" />
+          <span>{language === "en" ? "Add Patient" : "मरीज जोड़ें"}</span>
         </Button>
       </div>
 

@@ -396,6 +396,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     const sampleId = `TX-${Math.floor(100 + Math.random() * 900)}`
     const newPatient: Patient = {
       id: result.patientId,
+      ashaId,
       name: formData.name,
       nameHi: formData.name,
       age: parseInt(formData.age) || 0,
@@ -603,9 +604,12 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                     })
                   }
                   className="h-11"
-                  placeholder="9876543210"
+                  placeholder="10-digit e.g. 9876543210"
                   maxLength={10}
                 />
+                <p className="text-xs text-muted-foreground">
+                  {language === "en" ? "Enter exactly 10 digits." : "ठीक 10 अंक दर्ज करें।"}
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -625,11 +629,19 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                   id="pincode"
                   type="text"
                   value={formData.pincode}
-                  onChange={(e) => setFormData({ ...formData, pincode: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      pincode: e.target.value.replace(/\D/g, "").slice(0, 6),
+                    })
+                  }
                   className="h-11"
-                  placeholder="847226"
+                  placeholder="6-digit e.g. 847226"
                   maxLength={6}
                 />
+                <p className="text-xs text-muted-foreground">
+                  {language === "en" ? "Use 6-digit India PIN code." : "6 अंकों का भारत PIN कोड दर्ज करें।"}
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -639,9 +651,14 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                 <Input
                   id="aadhar"
                   value={formData.aadhar}
-                  onChange={(e) => setFormData({ ...formData, aadhar: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      aadhar: e.target.value.replace(/[^\d\s]/g, "").slice(0, 14),
+                    })
+                  }
                   className="h-11"
-                  placeholder="XXXX XXXX XXXX"
+                  placeholder="12-digit optional (e.g. 1234 5678 9012)"
                 />
               </div>
             </CardContent>

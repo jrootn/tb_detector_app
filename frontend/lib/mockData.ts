@@ -4,6 +4,7 @@ export type RiskFactorAnswer = "yes" | "no" | "dontKnow" | "preferNotToSay"
 
 export interface Patient {
   id: string
+  ashaId?: string
   name: string
   nameHi: string
   age: number

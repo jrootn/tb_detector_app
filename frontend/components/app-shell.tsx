@@ -9,7 +9,7 @@ import { PatientProfile } from "./patient-profile"
 import { PriorityView } from "./priority-view"
 import { UserProfileSettings } from "./user-profile-settings"
 import { mockPatients, type Patient } from "@/lib/mockData"
-import { getAllPatients, savePatients, seedPatientsIfEmpty, getPendingUploadCount } from "@/lib/db"
+import { getPatientsForAsha, savePatients, seedPatientsIfEmpty, getPendingUploadCount } from "@/lib/db"
 import { syncData } from "@/lib/sync"
 
 type Screen = "login" | "dashboard" | "screening" | "profile" | "priority" | "settings"
@@ -25,6 +25,16 @@ interface AppShellProps {
   initialAshaId?: string
   initialAshaName?: string
   onLogout?: () => void
+}
+
+function sortPatientsForQueue(patients: Patient[]) {
+  return [...patients].sort((a, b) => {
+    if (b.riskScore !== a.riskScore) return b.riskScore - a.riskScore
+    const aTime = new Date(a.collectionDate || a.createdAt).getTime()
+    const bTime = new Date(b.collectionDate || b.createdAt).getTime()
+    if (aTime !== bTime) return aTime - bTime
+    return a.id.localeCompare(b.id)
+  })
 }
 
 export function AppShell({
@@ -113,12 +123,14 @@ export function AppShell({
         if (enableMockSeed) {
           await seedPatientsIfEmpty(mockPatients)
         }
-        const stored = await getAllPatients()
-        if (isMounted && stored.length > 0) {
-          setPatients(stored)
-        }
+        const stored = await getPatientsForAsha(initialAshaId || undefined)
+        const scoped = stored.map((patient) =>
+          initialAshaId && !patient.ashaId ? { ...patient, ashaId: initialAshaId } : patient
+        )
+        const ordered = sortPatientsForQueue(scoped)
+        if (isMounted) setPatients(ordered)
         const pendingCount = await getPendingUploadCount(initialAshaId || undefined)
-        const needsSyncCount = stored.filter((p) => p.needsSync).length
+        const needsSyncCount = ordered.filter((p) => p.needsSync).length
         if (isMounted) setPendingUploads(pendingCount + needsSyncCount)
       } catch (error) {
         console.error("Failed to load patients from IndexedDB", error)
@@ -131,15 +143,16 @@ export function AppShell({
     return () => {
       isMounted = false
     }
-  }, [enableMockSeed])
+  }, [enableMockSeed, initialAshaId])
 
   // Refresh from IndexedDB after sync completes
   useEffect(() => {
     const handler = async () => {
-      const stored = await getAllPatients()
-      setPatients(stored)
+      const stored = await getPatientsForAsha(ashaId || undefined)
+      const ordered = sortPatientsForQueue(stored)
+      setPatients(ordered)
       const pendingCount = await getPendingUploadCount(ashaId || undefined)
-      const needsSyncCount = stored.filter((p) => p.needsSync).length
+      const needsSyncCount = ordered.filter((p) => p.needsSync).length
       setPendingUploads(pendingCount + needsSyncCount)
     }
 
@@ -152,9 +165,13 @@ export function AppShell({
   // When back online, refresh local cache to clear stale sync flags
   useEffect(() => {
     if (!dbReady || !isOnline) return
-    getAllPatients().then(setPatients).catch(() => undefined)
-    Promise.all([getAllPatients(), getPendingUploadCount(ashaId || undefined)])
+    getPatientsForAsha(ashaId || undefined)
+      .then((stored) => setPatients(sortPatientsForQueue(stored)))
+      .catch(() => undefined)
+    Promise.all([getPatientsForAsha(ashaId || undefined), getPendingUploadCount(ashaId || undefined)])
       .then(([stored, pendingCount]) => {
+        const ordered = sortPatientsForQueue(stored)
+        setPatients(ordered)
         const needsSyncCount = stored.filter((p) => p.needsSync).length
         setPendingUploads(pendingCount + needsSyncCount)
       })
@@ -219,19 +236,21 @@ export function AppShell({
   }, [])
 
   const handleUpdatePatient = useCallback((updated: Patient) => {
-    setPatients((prev) => prev.map((patient) => (patient.id === updated.id ? updated : patient)))
+    const next = updated.ashaId ? updated : { ...updated, ashaId }
+    setPatients((prev) => sortPatientsForQueue(prev.map((patient) => (patient.id === next.id ? next : patient))))
     setSelectedPatient(updated)
-  }, [])
+  }, [ashaId])
 
   const handleScreeningComplete = useCallback((newPatient: Patient) => {
-    setPatients((prev) => [newPatient, ...prev])
+    const next = newPatient.ashaId ? newPatient : { ...newPatient, ashaId }
+    setPatients((prev) => sortPatientsForQueue([next, ...prev]))
     if (navigator.onLine) {
       syncData().catch((error) => {
         console.warn("Auto-sync after screening failed", error)
       })
     }
     setCurrentScreen("dashboard")
-  }, [])
+  }, [ashaId])
 
   return (
     <LanguageProvider>

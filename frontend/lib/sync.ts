@@ -1,4 +1,4 @@
-import { getAllPatients, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
+import { getPatientsForAsha, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
 import type { Patient } from "@/lib/mockData"
 import { auth, db, storage } from "@/lib/firebase"
 import { normalizeAiRiskScore } from "@/lib/ai"
@@ -414,6 +414,12 @@ function mapFirestorePatientToLocal(
 
   return {
     id: patientId,
+    ashaId:
+      typeof data.asha_id === "string"
+        ? data.asha_id
+        : typeof data.asha_worker_id === "string"
+        ? data.asha_worker_id
+        : existing?.ashaId,
     name: typeof demographics.name === "string" ? demographics.name : existing?.name || "Unknown",
     nameHi: existing?.nameHi || (typeof demographics.name === "string" ? demographics.name : existing?.name || "Unknown"),
     age: typeof demographics.age === "number" ? demographics.age : existing?.age || 0,
@@ -474,7 +480,8 @@ async function refreshLocalPatientsFromFirestore(
   localPatients: Patient[]
 ): Promise<Patient[] | null> {
   try {
-    const existingById = new Map(localPatients.map((p) => [p.id, p]))
+    const localForAsha = localPatients.filter((p) => !p.ashaId || p.ashaId === ashaWorkerId)
+    const existingById = new Map(localForAsha.map((p) => [p.id, p]))
     const snap = await getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId)))
     if (snap.empty) return null
 
@@ -482,8 +489,9 @@ async function refreshLocalPatientsFromFirestore(
       mapFirestorePatientToLocal(docSnap.id, docSnap.data() as Record<string, unknown>, existingById.get(docSnap.id))
     )
     const remoteIds = new Set(remote.map((p) => p.id))
-    const unsyncedLocalOnly = localPatients.filter((p) => p.needsSync && !remoteIds.has(p.id))
-    const merged = [...remote, ...unsyncedLocalOnly]
+    // Preserve local-only records if backend indexing lags; prevents UI disappearance after refresh.
+    const localMissingRemote = localForAsha.filter((p) => !remoteIds.has(p.id))
+    const merged = [...remote, ...localMissingRemote]
     merged.sort((a, b) => {
       const aTime = new Date(a.collectionDate || a.createdAt).getTime()
       const bTime = new Date(b.collectionDate || b.createdAt).getTime()
@@ -560,7 +568,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
     try {
       const idToken = await currentUser.getIdToken()
       const assignment = await resolveAssignmentContext(currentUser.uid)
-      const patients = await getAllPatients()
+      const patients = await getPatientsForAsha(currentUser.uid)
       const pending = patients.filter((p) => p.needsSync)
       const records = pending.map((p) => mapPatientToSyncRecord(p, currentUser.uid, assignment))
       const syncedIds = new Set<string>()
@@ -601,7 +609,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
 
     await syncUploads(currentUser.uid)
 
-    const localAfterSync = await getAllPatients()
+    const localAfterSync = await getPatientsForAsha(currentUser.uid)
     const refreshed = await refreshLocalPatientsFromFirestore(currentUser.uid, localAfterSync)
     if (refreshed && refreshed.length > 0) {
       await savePatients(refreshed)
