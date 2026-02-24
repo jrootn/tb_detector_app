@@ -13,7 +13,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Activity, ArrowLeft, ArrowRight, Check, AlertTriangle, Mic, Square } from "lucide-react"
 import { toast } from "sonner"
 import { LanguageSwitcher } from "./language-switcher"
-import { submitScreening, calculateRiskScore, type ScreeningData } from "@/lib/api"
+import { submitScreening, type ScreeningData } from "@/lib/api"
 import { addUpload, assignPendingUploadsToPatient } from "@/lib/db"
 import type { Patient, RiskLevel } from "@/lib/mockData"
 
@@ -25,6 +25,7 @@ interface GPSLocation {
 
 interface ScreeningFlowProps {
   ashaId: string
+  ashaName?: string
   isOnline: boolean
   onComplete: (patient: Patient) => void
   onBack: () => void
@@ -89,7 +90,7 @@ const initialRiskFactors: RiskFactorState = {
   historyOfHIV: "no",
 }
 
-export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocation }: ScreeningFlowProps) {
+export function ScreeningFlow({ ashaId, ashaName, isOnline, onComplete, onBack, gpsLocation }: ScreeningFlowProps) {
   const { t, language } = useLanguage()
   const [step, setStep] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -386,17 +387,14 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
 
     const result = await submitScreening(screeningData)
 
-    // Calculate risk score
-    const riskScore = calculateRiskScore(screeningData)
-    let riskLevel: RiskLevel = "low"
-    if (riskScore >= 7) riskLevel = "high"
-    else if (riskScore >= 4) riskLevel = "medium"
-
     // Create new patient
     const sampleId = `TX-${Math.floor(100 + Math.random() * 900)}`
+    const collectedAtIso = new Date().toISOString()
+    const riskLevel: RiskLevel = "low"
     const newPatient: Patient = {
       id: result.patientId,
       ashaId,
+      ashaName: ashaName || undefined,
       name: formData.name,
       nameHi: formData.name,
       age: parseInt(formData.age) || 0,
@@ -408,8 +406,9 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       aadhar: formData.aadhar || undefined,
       village: formData.address.split(",").pop()?.trim() || formData.address,
       villageHi: formData.address.split(",").pop()?.trim() || formData.address,
-      riskScore,
+      riskScore: 0,
       riskLevel,
+      aiStatus: "pending",
       status: "awaitingDoctor",
       distanceToPHC: Math.round(Math.random() * 20 + 2),
       needsSync: true,
@@ -428,7 +427,8 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       riskFactors: positiveRiskFactors,
       riskFactorAnswers,
       otherObservations: formData.otherObservations,
-      createdAt: today,
+      createdAt: collectedAtIso,
+      collectedAt: collectedAtIso,
       collectionDate: today,
       latitude: gpsLocation.latitude || undefined,
       longitude: gpsLocation.longitude || undefined,

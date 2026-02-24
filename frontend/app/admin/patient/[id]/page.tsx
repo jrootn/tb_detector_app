@@ -19,6 +19,10 @@ interface PatientRecord {
   assigned_doctor_id?: string
   assigned_lab_tech_id?: string
   demographics?: { name?: string; phone?: string; age?: number; gender?: string; village?: string; pincode?: string }
+  asha_name?: string
+  asha_id?: string
+  asha_worker_id?: string
+  created_at_offline?: string
   ai?: {
     risk_score?: number
     risk_level?: string
@@ -78,6 +82,17 @@ export default function AdminPatientPage() {
   }, [params.id, router])
 
   if (!ready || !patient) return <div className="p-6">Loading...</div>
+  const aiRiskScore = (() => {
+    const numeric = typeof patient.ai?.risk_score === "number" ? patient.ai?.risk_score : Number(patient.ai?.risk_score)
+    if (!Number.isFinite(numeric)) return null
+    return normalizeAiRiskScore(numeric)
+  })()
+  const collectedAtLabel = (() => {
+    if (!patient.created_at_offline) return "-"
+    const date = new Date(patient.created_at_offline)
+    if (Number.isNaN(date.getTime())) return patient.created_at_offline
+    return date.toLocaleString("en-IN")
+  })()
 
   return (
     <div className="min-h-screen p-4 space-y-4 bg-background">
@@ -92,11 +107,13 @@ export default function AdminPatientPage() {
           <div>Phone: {patient.demographics?.phone || "-"}</div>
           <div>Age/Gender: {patient.demographics?.age || "-"} / {patient.demographics?.gender || "-"}</div>
           <div>Village/Pincode: {patient.demographics?.village || "-"} / {patient.demographics?.pincode || "-"}</div>
+          <div>Collected by: {patient.asha_name || patient.asha_id || patient.asha_worker_id || "-"}</div>
+          <div>Collected at: {collectedAtLabel}</div>
           <div>Facility: {patient.facility_name || patient.facility_id || "-"}</div>
           <div>Assigned Doctor UID: {patient.assigned_doctor_id || "-"}</div>
           <div>Assigned Lab UID: {patient.assigned_lab_tech_id || "-"}</div>
           <div>Status: {triageStatusLabel(patient.status?.triage_status)}</div>
-          <div>AI Risk: {normalizeAiRiskScore(patient.ai?.risk_score).toFixed(1)} ({patient.ai?.risk_level || "-"})</div>
+          <div>AI Risk: {aiRiskScore == null ? "Awaiting AI" : `${aiRiskScore.toFixed(1)} / 10 (${Math.round(aiRiskScore * 10)}%)`} ({patient.ai?.risk_level || "-"})</div>
           <div>AI Summary: {getAiSummaryText(patient.ai, "en") || "-"}</div>
           <div>GPS: {patient.gps?.lat ?? "-"}, {patient.gps?.lng ?? "-"}</div>
         </CardContent>

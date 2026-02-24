@@ -187,6 +187,15 @@ function toDateOnly(value?: string): string {
   return value.split("T")[0]
 }
 
+function toIsoTimestamp(value?: string): string {
+  if (!value) return new Date().toISOString()
+  const date = new Date(value)
+  if (!Number.isNaN(date.getTime())) {
+    return date.toISOString()
+  }
+  return value
+}
+
 function parseLocalizedSummary(ai: Record<string, unknown>): { en?: string; hi?: string } {
   const result: { en?: string; hi?: string } = {}
   const direct = ai.medgemini_summary
@@ -250,12 +259,13 @@ function buildSymptomList(patient: Patient) {
 }
 
 function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string, assignment?: AssignmentContext) {
+  const collectedAt = patient.collectedAt || patient.createdAt
   return {
     patient_local_id: patient.id,
     device_id: "web-app",
     asha_worker_id: ashaWorkerId,
     asha_id: ashaWorkerId,
-    created_at_offline: patient.createdAt,
+    created_at_offline: collectedAt,
     demographics: {
       name: patient.name,
       age: patient.age,
@@ -301,18 +311,19 @@ function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string, assignme
     assignment_mode: assignment?.facilityId ? "FACILITY_TAGGING" : null,
     assigned_doctor_id: assignment?.assignedDoctorId || null,
     assigned_lab_tech_id: assignment?.assignedLabTechId || null,
-    asha_name: assignment?.ashaName || null,
-    asha_phone_number: assignment?.ashaPhone || null,
+    asha_name: assignment?.ashaName || patient.ashaName || null,
+    asha_phone_number: assignment?.ashaPhone || patient.ashaPhone || null,
   }
 }
 
 function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, assignment?: AssignmentContext) {
+  const collectedAt = patient.collectedAt || patient.createdAt
   return {
     patient_local_id: patient.id,
     device_id: "web-app",
     asha_worker_id: ashaWorkerId,
     asha_id: ashaWorkerId,
-    created_at_offline: patient.createdAt,
+    created_at_offline: collectedAt,
     synced_at: new Date().toISOString(),
     demographics: {
       name: patient.name,
@@ -362,8 +373,8 @@ function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, ass
     assignment_mode: assignment?.facilityId ? "FACILITY_TAGGING" : null,
     assigned_doctor_id: assignment?.assignedDoctorId || null,
     assigned_lab_tech_id: assignment?.assignedLabTechId || null,
-    asha_name: assignment?.ashaName || null,
-    asha_phone_number: assignment?.ashaPhone || null,
+    asha_name: assignment?.ashaName || patient.ashaName || null,
+    asha_phone_number: assignment?.ashaPhone || patient.ashaPhone || null,
   }
 }
 
@@ -380,16 +391,39 @@ function mapFirestorePatientToLocal(
   const status = (data.status || {}) as Record<string, unknown>
 
   const localizedSummary = parseLocalizedSummary(ai)
-  const riskScoreRaw =
-    typeof ai.risk_score === "number"
-      ? ai.risk_score
-      : typeof existing?.riskScore === "number"
-      ? existing.riskScore
-      : 0
-  const riskScore = normalizeAiRiskScore(riskScoreRaw, existing?.riskScore || 0)
+  const hasAiRiskScore = typeof ai.risk_score === "number" || Number.isFinite(Number(ai.risk_score))
+  const riskScore = hasAiRiskScore ? normalizeAiRiskScore(ai.risk_score, 0) : 0
   const riskLevelRaw = typeof ai.risk_level === "string" ? ai.risk_level.toUpperCase() : ""
+  const inferenceStatusRaw = typeof ai.inference_status === "string" ? ai.inference_status.toUpperCase() : ""
+  const summaryEn = localizedSummary.en || existing?.medGemmaReasoning
+  const summaryHi = localizedSummary.hi || existing?.medGemmaReasoningI18n?.hi
+  const hasAnyAiOutput = hasAiRiskScore || typeof ai.hear_score === "number" || Boolean(summaryEn || summaryHi)
+  const aiStatus: Patient["aiStatus"] =
+    inferenceStatusRaw === "FAILED"
+      ? "failed"
+      : inferenceStatusRaw === "SUCCESS" || inferenceStatusRaw === "COMPLETED" || hasAnyAiOutput
+      ? "success"
+      : "pending"
   const riskLevel: Patient["riskLevel"] =
-    riskLevelRaw === "HIGH" ? "high" : riskLevelRaw === "MEDIUM" ? "medium" : riskLevelRaw === "LOW" ? "low" : riskScore >= 7 ? "high" : riskScore >= 4 ? "medium" : "low"
+    riskLevelRaw === "HIGH"
+      ? "high"
+      : riskLevelRaw === "MEDIUM"
+      ? "medium"
+      : riskLevelRaw === "LOW"
+      ? "low"
+      : aiStatus === "success"
+      ? riskScore >= 7
+        ? "high"
+        : riskScore >= 4
+        ? "medium"
+        : "low"
+      : "low"
+  const collectedAtSource =
+    typeof data.created_at_offline === "string"
+      ? data.created_at_offline
+      : typeof existing?.collectedAt === "string"
+      ? existing.collectedAt
+      : existing?.createdAt
 
   const rawRiskAnswers = (clinical.risk_factor_answers || {}) as Record<string, unknown>
   const riskFactorAnswers: NonNullable<Patient["riskFactorAnswers"]> = {}
@@ -409,9 +443,6 @@ function mapFirestorePatientToLocal(
     .filter((sign): sign is string => typeof sign === "string")
     .map((sign) => normalizePhysicalSign(sign))
 
-  const summaryEn = localizedSummary.en || existing?.medGemmaReasoning
-  const summaryHi = localizedSummary.hi || existing?.medGemmaReasoningI18n?.hi
-
   return {
     id: patientId,
     ashaId:
@@ -420,6 +451,8 @@ function mapFirestorePatientToLocal(
         : typeof data.asha_worker_id === "string"
         ? data.asha_worker_id
         : existing?.ashaId,
+    ashaName: typeof data.asha_name === "string" ? data.asha_name : existing?.ashaName,
+    ashaPhone: typeof data.asha_phone_number === "string" ? data.asha_phone_number : existing?.ashaPhone,
     name: typeof demographics.name === "string" ? demographics.name : existing?.name || "Unknown",
     nameHi: existing?.nameHi || (typeof demographics.name === "string" ? demographics.name : existing?.name || "Unknown"),
     age: typeof demographics.age === "number" ? demographics.age : existing?.age || 0,
@@ -435,6 +468,7 @@ function mapFirestorePatientToLocal(
     villageHi: existing?.villageHi || (typeof demographics.village === "string" ? demographics.village : existing?.village || ""),
     riskScore: Number(riskScore),
     riskLevel,
+    aiStatus,
     status: mapStatusFromApi(typeof status.triage_status === "string" ? status.triage_status : undefined),
     distanceToPHC: existing?.distanceToPHC || 0,
     needsSync: false,
@@ -465,8 +499,9 @@ function mapFirestorePatientToLocal(
     hearAudioScore: typeof ai.hear_score === "number" ? ai.hear_score : existing?.hearAudioScore,
     medGemmaReasoning: summaryEn,
     medGemmaReasoningI18n: summaryEn || summaryHi ? { en: summaryEn, hi: summaryHi } : existing?.medGemmaReasoningI18n,
-    createdAt: toDateOnly(typeof data.created_at_offline === "string" ? data.created_at_offline : existing?.createdAt),
-    collectionDate: toDateOnly(typeof data.created_at_offline === "string" ? data.created_at_offline : existing?.collectionDate),
+    createdAt: toIsoTimestamp(collectedAtSource),
+    collectedAt: toIsoTimestamp(collectedAtSource),
+    collectionDate: toDateOnly(collectedAtSource),
     scheduledTestDate: typeof status.test_scheduled_date === "string" ? status.test_scheduled_date : existing?.scheduledTestDate,
     sampleId: typeof data.sample_id === "string" ? data.sample_id : existing?.sampleId,
     latitude: typeof gps.lat === "number" ? gps.lat : existing?.latitude,
@@ -576,14 +611,22 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
     if (!options.uploadsOnly && records.length > 0) {
       let syncedViaBackend = false
       try {
-        const res = await fetch(`${API_BASE}/v1/sync`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${idToken}`,
-          },
-          body: JSON.stringify({ records }),
-        })
+        const aborter = new AbortController()
+        const timeout = window.setTimeout(() => aborter.abort(), 6000)
+        let res: Response
+        try {
+          res = await fetch(`${API_BASE}/v1/sync`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${idToken}`,
+            },
+            signal: aborter.signal,
+            body: JSON.stringify({ records }),
+          })
+        } finally {
+          window.clearTimeout(timeout)
+        }
 
         if (!res.ok) {
           throw new Error(`Sync failed: ${res.status}`)

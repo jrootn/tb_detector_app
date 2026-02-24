@@ -5,6 +5,8 @@ export type RiskFactorAnswer = "yes" | "no" | "dontKnow" | "preferNotToSay"
 export interface Patient {
   id: string
   ashaId?: string
+  ashaName?: string
+  ashaPhone?: string
   name: string
   nameHi: string
   age: number
@@ -18,6 +20,7 @@ export interface Patient {
   aadhar?: string
   riskScore: number
   riskLevel: RiskLevel
+  aiStatus?: "pending" | "success" | "failed"
   status: PatientStatus
   distanceToPHC: number // in km
   needsSync: boolean
@@ -51,6 +54,7 @@ export interface Patient {
   
   // Dates
   createdAt: string
+  collectedAt?: string
   collectionDate: string
   scheduledTestDate?: string
 

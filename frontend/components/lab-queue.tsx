@@ -29,8 +29,11 @@ interface PatientRecord {
   asha_phone_number?: string
 }
 
-function getPatientRiskScore(patient: PatientRecord): number {
-  return normalizeAiRiskScore(patient.ai?.risk_score)
+function getPatientRiskScore(patient: PatientRecord): number | null {
+  const raw = patient.ai?.risk_score
+  const numeric = typeof raw === "number" ? raw : Number(raw)
+  if (!Number.isFinite(numeric)) return null
+  return normalizeAiRiskScore(numeric)
 }
 
 interface LabQueueProps {
@@ -111,7 +114,13 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
       if (aRank !== bRank) return aRank - bRank
       const aScore = getPatientRiskScore(a)
       const bScore = getPatientRiskScore(b)
-      return bScore - aScore
+      if (aScore == null && bScore != null) return 1
+      if (aScore != null && bScore == null) return -1
+      if (aScore != null && bScore != null && bScore !== aScore) return bScore - aScore
+      const aTime = new Date(a.created_at_offline || "").getTime()
+      const bTime = new Date(b.created_at_offline || "").getTime()
+      if (!Number.isNaN(aTime) && !Number.isNaN(bTime) && aTime !== bTime) return aTime - bTime
+      return a.id.localeCompare(b.id)
     })
   }, [scopedPatients])
 
@@ -119,7 +128,8 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
     const now = new Date()
     return ordered.filter((p) => {
       const score = getPatientRiskScore(p)
-      if (score < minScore) return false
+      if (score != null && score < minScore) return false
+      if (score == null && minScore > 0) return false
 
       const status = p.status?.triage_status
       const statusCode = normalizeTriageStatus(status)
@@ -243,10 +253,14 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
           <tbody>
             {filtered.map((p) => (
               <tr key={p.id} className="border-t">
+                {(() => {
+                  const score = getPatientRiskScore(p)
+                  return (
+                    <>
                 <td className="p-3">{p.sample_id || "-"}</td>
                 <td className="p-3">{p.demographics?.name || "Unknown"}</td>
-                <td className={`p-3 ${getPatientRiskScore(p) >= 8 ? "text-red-600" : "text-emerald-600"}`}>
-                  {getPatientRiskScore(p).toFixed(1)}
+                <td className={`p-3 ${score != null && score >= 8 ? "text-red-600" : "text-emerald-600"}`}>
+                  {score == null ? "Awaiting AI" : `${score.toFixed(1)} / 10 (${Math.round(score * 10)}%)`}
                 </td>
                 <td className="p-3">
                   {Boolean(
@@ -338,6 +352,9 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
                     Open
                   </button>
                 </td>
+                    </>
+                  )
+                })()}
               </tr>
             ))}
             {filtered.length === 0 && (

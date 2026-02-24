@@ -29,7 +29,10 @@ interface AppShellProps {
 
 function sortPatientsForQueue(patients: Patient[]) {
   return [...patients].sort((a, b) => {
-    if (b.riskScore !== a.riskScore) return b.riskScore - a.riskScore
+    const aHasAi = a.aiStatus === "success"
+    const bHasAi = b.aiStatus === "success"
+    if (aHasAi !== bHasAi) return aHasAi ? -1 : 1
+    if (aHasAi && bHasAi && b.riskScore !== a.riskScore) return b.riskScore - a.riskScore
     const aTime = new Date(a.collectionDate || a.createdAt).getTime()
     const bTime = new Date(b.collectionDate || b.createdAt).getTime()
     if (aTime !== bTime) return aTime - bTime
@@ -43,7 +46,7 @@ export function AppShell({
   initialAshaName = "",
   onLogout,
 }: AppShellProps) {
-  const enableMockSeed = process.env.NEXT_PUBLIC_ENABLE_MOCK_SEED === "1"
+  const enableMockSeed = process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_ENABLE_MOCK_SEED === "1"
   const [currentScreen, setCurrentScreen] = useState<Screen>(initialScreen)
   const [isOnline, setIsOnline] = useState(true)
   const [ashaId, setAshaId] = useState(initialAshaId)
@@ -57,6 +60,14 @@ export function AppShell({
     longitude: null,
     error: null,
   })
+
+  useEffect(() => {
+    setAshaId(initialAshaId)
+  }, [initialAshaId])
+
+  useEffect(() => {
+    setAshaName(initialAshaName)
+  }, [initialAshaName])
 
   // Auto-detect network status
   useEffect(() => {
@@ -125,13 +136,12 @@ export function AppShell({
         }
         const stored = await getPatientsForAsha(initialAshaId || undefined)
         const scoped = stored.map((patient) =>
-          initialAshaId && !patient.ashaId ? { ...patient, ashaId: initialAshaId } : patient
+          initialAshaId && !patient.ashaId && patient.needsSync ? { ...patient, ashaId: initialAshaId } : patient
         )
         const ordered = sortPatientsForQueue(scoped)
         if (isMounted) setPatients(ordered)
         const pendingCount = await getPendingUploadCount(initialAshaId || undefined)
-        const needsSyncCount = ordered.filter((p) => p.needsSync).length
-        if (isMounted) setPendingUploads(pendingCount + needsSyncCount)
+        if (isMounted) setPendingUploads(pendingCount)
       } catch (error) {
         console.error("Failed to load patients from IndexedDB", error)
       } finally {
@@ -152,15 +162,14 @@ export function AppShell({
       const ordered = sortPatientsForQueue(stored)
       setPatients(ordered)
       const pendingCount = await getPendingUploadCount(ashaId || undefined)
-      const needsSyncCount = ordered.filter((p) => p.needsSync).length
-      setPendingUploads(pendingCount + needsSyncCount)
+      setPendingUploads(pendingCount)
     }
 
     window.addEventListener("sync:complete", handler)
     return () => {
       window.removeEventListener("sync:complete", handler)
     }
-  }, [])
+  }, [ashaId])
 
   // When back online, refresh local cache to clear stale sync flags
   useEffect(() => {
@@ -172,8 +181,7 @@ export function AppShell({
       .then(([stored, pendingCount]) => {
         const ordered = sortPatientsForQueue(stored)
         setPatients(ordered)
-        const needsSyncCount = stored.filter((p) => p.needsSync).length
-        setPendingUploads(pendingCount + needsSyncCount)
+        setPendingUploads(pendingCount)
       })
       .catch(() => undefined)
   }, [dbReady, isOnline])
@@ -238,7 +246,7 @@ export function AppShell({
   const handleUpdatePatient = useCallback((updated: Patient) => {
     const next = updated.ashaId ? updated : { ...updated, ashaId }
     setPatients((prev) => sortPatientsForQueue(prev.map((patient) => (patient.id === next.id ? next : patient))))
-    setSelectedPatient(updated)
+    setSelectedPatient(next)
   }, [ashaId])
 
   const handleScreeningComplete = useCallback((newPatient: Patient) => {
@@ -276,6 +284,7 @@ export function AppShell({
         {currentScreen === "screening" && (
           <ScreeningFlow
             ashaId={ashaId}
+            ashaName={ashaName}
             isOnline={isOnline}
             onComplete={handleScreeningComplete}
             onBack={() => setCurrentScreen("dashboard")}

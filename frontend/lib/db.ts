@@ -40,7 +40,7 @@ export async function getAllPatients() {
 export async function getPatientsForAsha(ashaId?: string) {
   const all = await db.patients.toArray()
   if (!ashaId) return all
-  return all.filter((patient) => !patient.ashaId || patient.ashaId === ashaId)
+  return all.filter((patient) => patient.ashaId === ashaId || (!patient.ashaId && patient.needsSync))
 }
 
 export async function seedPatientsIfEmpty(patients: PatientRecord[]) {
@@ -85,7 +85,7 @@ export async function removeUpload(id: string) {
 
 export async function getPendingUploadCount(ownerUid?: string) {
   const uploads = await getPendingUploads(ownerUid)
-  return uploads.length
+  return uploads.filter((upload) => upload.patientId !== "pending").length
 }
 
 export { db }

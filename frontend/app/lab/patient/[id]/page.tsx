@@ -18,6 +18,10 @@ interface PatientRecord {
   demographics?: { name?: string; phone?: string; age?: number; gender?: string }
   ai?: { risk_score?: number; medgemini_summary?: string }
   status?: { triage_status?: string }
+  created_at_offline?: string
+  asha_name?: string
+  asha_id?: string
+  asha_worker_id?: string
   lab_results?: {
     report_uri?: string
     report_path?: string
@@ -70,6 +74,17 @@ export default function LabPatientPage() {
   }, [params.id, router])
 
   if (!ready || !patient) return <div className="p-6">Loading...</div>
+  const riskScore = (() => {
+    const numeric = typeof patient.ai?.risk_score === "number" ? patient.ai?.risk_score : Number(patient.ai?.risk_score)
+    if (!Number.isFinite(numeric)) return null
+    return normalizeAiRiskScore(numeric)
+  })()
+  const collectedAtLabel = (() => {
+    if (!patient.created_at_offline) return "-"
+    const date = new Date(patient.created_at_offline)
+    if (Number.isNaN(date.getTime())) return patient.created_at_offline
+    return date.toLocaleString("en-IN")
+  })()
 
   return (
     <div className="min-h-screen p-4 space-y-4 bg-background">
@@ -83,8 +98,10 @@ export default function LabPatientPage() {
         </CardHeader>
         <CardContent className="space-y-1 text-sm">
           <div>Sample ID: {patient.sample_id || "-"}</div>
+          <div>Collected by: {patient.asha_name || patient.asha_id || patient.asha_worker_id || "-"}</div>
+          <div>Collected at: {collectedAtLabel}</div>
           <div>Phone: {patient.demographics?.phone || "-"}</div>
-          <div>Risk Score: {normalizeAiRiskScore(patient.ai?.risk_score).toFixed(1)}</div>
+          <div>Risk Score: {riskScore == null ? "Awaiting AI" : `${riskScore.toFixed(1)} / 10 (${Math.round(riskScore * 10)}%)`}</div>
           <div>Status: {triageStatusLabel(patient.status?.triage_status)}</div>
           {reportUrl && (
             <a className="text-blue-600 underline" href={reportUrl} target="_blank" rel="noreferrer">
