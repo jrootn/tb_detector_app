@@ -46,12 +46,13 @@ Use `/login` and sign in with one account at a time.
 2. Login as ASHA: `sunita.asha@indiatb.gov` / `password123`
 3. Create one screening (or open existing high-risk patients in ASHA dashboard).
 4. Wait for backend processing (typically seconds to a few minutes; cold start can be longer).
-5. Logout and login as Lab: `rohan.lab@indiatb.gov` / `password123`
-6. Show lab queue ordering by urgency/risk and upload a lab report for one case.
-7. Logout and login as Doctor: `aditi.doctor@indiatb.gov` / `password123`
-8. Show ranked queue, risk score, and AI summary on doctor side.
-9. Logout and login as Admin: `suresh.sts@indiatb.gov` / `password123`
-10. Show Control Tower analytics, risk distribution, and facility-level operations.
+5. Live demo note: inference backend is configured with `min instances = 0`, so the first AI prediction after idle can take ~15-20 minutes in worst case.
+6. Logout and login as Lab: `rohan.lab@indiatb.gov` / `password123`
+7. Show lab queue ordering by urgency/risk and upload a lab report for one case.
+8. Logout and login as Doctor: `aditi.doctor@indiatb.gov` / `password123`
+9. Show ranked queue, risk score, and AI summary on doctor side.
+10. Logout and login as Admin: `suresh.sts@indiatb.gov` / `password123`
+11. Show Control Tower analytics, risk distribution, and facility-level operations.
 
 ### Optional validation checks (for judges)
 - Confirm AI bilingual summary fields exist: `ai.medgemini_summary_en`, `ai.medgemini_summary_hi`.
@@ -300,8 +301,9 @@ Observed from Cloud Run request logs (current deployment):
 - One cold/first-load request observed at ~603s (`2026-02-23T22:54:30Z`) due heavy model initialization.
 
 Why this happens:
-- Backend inference is configured for scale-to-zero economics.
+- Backend inference in the live demo is configured with `min instances = 0` (scale-to-zero economics).
 - Real HEAR + classical + MedGemma model loading is heavy on first activation.
+- In the worst case after idle, first prediction can take ~15-20 minutes.
 
 Mitigation options:
 1. Set `min instances > 0` on inference service for demo-critical windows.
