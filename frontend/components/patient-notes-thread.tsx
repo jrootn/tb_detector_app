@@ -53,6 +53,19 @@ function roleBadge(role?: NoteRole): string {
   return "bg-emerald-100 text-emerald-700"
 }
 
+function visibilityLabel(value: NoteVisibility): string {
+  switch (value) {
+    case "ALL":
+      return "All Roles"
+    case "DOCTOR_ASHA":
+      return "Doctor + ASHA"
+    case "DOCTOR_LAB":
+      return "Doctor + Lab"
+    default:
+      return value
+  }
+}
+
 export function PatientNotesThread({ patientId, viewerRole, className }: PatientNotesThreadProps) {
   const [isOnline, setIsOnline] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -149,11 +162,12 @@ export function PatientNotesThread({ patientId, viewerRole, className }: Patient
           >
             {allowedVisibilities(viewerRole).map((option) => (
               <option key={option} value={option}>
-                {option}
+                {visibilityLabel(option)}
               </option>
             ))}
           </select>
         </div>
+        <div className="text-xs text-muted-foreground">Choose who can view this note.</div>
         <Textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
@@ -183,11 +197,10 @@ export function PatientNotesThread({ patientId, viewerRole, className }: Patient
               </span>
             </div>
             <div className="mt-2 text-sm whitespace-pre-wrap">{note.message || ""}</div>
-            <div className="mt-2 text-xs text-muted-foreground">Visibility: {note.visibility || "ALL"}</div>
+            <div className="mt-2 text-xs text-muted-foreground">Visibility: {visibilityLabel(note.visibility || "ALL")}</div>
           </div>
         ))}
       </div>
     </div>
   )
 }
-

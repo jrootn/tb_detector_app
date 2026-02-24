@@ -48,6 +48,9 @@ interface PatientRecord {
   status?: { triage_status?: string }
   sample_id?: string
   created_at_offline?: string
+  asha_name?: string
+  asha_id?: string
+  asha_worker_id?: string
 }
 
 interface DoctorDashboardProps {
@@ -60,8 +63,22 @@ function normalizeName(name?: string) {
   return name.replace(/\s+\d+$/, "")
 }
 
-function getPatientRiskScore(patient: PatientRecord): number {
-  return normalizeAiRiskScore(patient.ai?.risk_score)
+function getPatientRiskScore(patient: PatientRecord): number | null {
+  const raw = patient.ai?.risk_score
+  const numeric = typeof raw === "number" ? raw : Number(raw)
+  if (!Number.isFinite(numeric)) return null
+  return normalizeAiRiskScore(numeric)
+}
+
+function scoreSeverity(score: number | null): "High" | "Medium" | "Low" | "Pending" {
+  if (score == null) return "Pending"
+  if (score >= 7) return "High"
+  if (score >= 4) return "Medium"
+  return "Low"
+}
+
+function formatScore(score: number): string {
+  return `${score.toFixed(1)} / 10 (${Math.round(score * 10)}%)`
 }
 
 export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps) {
@@ -83,21 +100,48 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   useEffect(() => {
     if (!doctorUid) return
     setMounted(true)
-    const q = query(collection(db, "patients"), where("assigned_doctor_id", "==", doctorUid))
-    const unsub = onSnapshot(
-      q,
+    let assignedRows: PatientRecord[] = []
+    let facilityRows: PatientRecord[] = []
+
+    const flush = () => {
+      const merged = [...assignedRows, ...facilityRows]
+      const deduped = new Map<string, PatientRecord>()
+      merged.forEach((row) => deduped.set(row.id, row))
+      setPatients(Array.from(deduped.values()))
+      setPermissionError(null)
+    }
+
+    const unsubAssigned = onSnapshot(
+      query(collection(db, "patients"), where("assigned_doctor_id", "==", doctorUid)),
       (snap) => {
-        const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as PatientRecord) }))
-        setPatients(rows)
-        setPermissionError(null)
+        assignedRows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as PatientRecord) }))
+        flush()
       },
       (error) => {
-        console.error("Failed to load patients", error)
+        console.error("Failed to load doctor-assigned patients", error)
         setPermissionError("Doctor patient permissions are blocked. Check Firestore rules for assigned_doctor_id read access.")
       }
     )
-    return () => unsub()
-  }, [doctorUid])
+
+    let unsubFacility = () => {}
+    if (facilityId) {
+      unsubFacility = onSnapshot(
+        query(collection(db, "patients"), where("facility_id", "==", facilityId)),
+        (snap) => {
+          facilityRows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as PatientRecord) }))
+          flush()
+        },
+        (error) => {
+          console.warn("Facility-level patient feed unavailable", error)
+        }
+      )
+    }
+
+    return () => {
+      unsubAssigned()
+      unsubFacility()
+    }
+  }, [doctorUid, facilityId])
 
   useEffect(() => {
     const handler = () => setIsOnline(navigator.onLine)
@@ -177,7 +221,13 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       }
       const aScore = getPatientRiskScore(a)
       const bScore = getPatientRiskScore(b)
-      return bScore - aScore
+      if (aScore == null && bScore != null) return 1
+      if (aScore != null && bScore == null) return -1
+      if (aScore != null && bScore != null && bScore !== aScore) return bScore - aScore
+      const aTime = new Date(a.created_at_offline || "").getTime()
+      const bTime = new Date(b.created_at_offline || "").getTime()
+      if (!Number.isNaN(aTime) && !Number.isNaN(bTime) && aTime !== bTime) return aTime - bTime
+      return a.id.localeCompare(b.id)
     })
   }, [filtered])
 
@@ -197,10 +247,17 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   }, [sorted, selectedPatientId])
 
   const markUrgent = async (patientId: string) => {
-    await updateDoc(doc(db, "patients", patientId), { doctor_priority: true })
-    setPatients((prev) =>
-      prev.map((p) => (p.id === patientId ? { ...p, doctor_priority: true } : p))
-    )
+    if (!isOnline) {
+      toast.error("You are offline. Go online to update urgency.")
+      return
+    }
+    try {
+      await updateDoc(doc(db, "patients", patientId), { doctor_priority: true })
+      setPatients((prev) => prev.map((p) => (p.id === patientId ? { ...p, doctor_priority: true } : p)))
+      toast.success("Marked as urgent.")
+    } catch {
+      toast.error("Could not mark urgent. Check permissions and retry.")
+    }
   }
 
   const swapDoctorRanks = async (
@@ -253,6 +310,10 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   }
 
   const moveUp = async (patientId: string) => {
+    if (!isOnline) {
+      toast.error("You are offline. Go online to reorder queue.")
+      return
+    }
     const awaitingQueue = sorted.filter((p) => isRankEditableStatus(p.status?.triage_status))
     const index = awaitingQueue.findIndex((p) => p.id === patientId)
     if (index <= 0) return
@@ -264,10 +325,19 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       toast.error("Please enter a reason for rank change.")
       return
     }
-    await swapDoctorRanks(current, awaitingQueue[index - 1], trimmed, "MOVE_UP", index + 1, index)
+    try {
+      await swapDoctorRanks(current, awaitingQueue[index - 1], trimmed, "MOVE_UP", index + 1, index)
+      toast.success("Queue updated.")
+    } catch {
+      toast.error("Could not move patient up. Check permissions and retry.")
+    }
   }
 
   const moveDown = async (patientId: string) => {
+    if (!isOnline) {
+      toast.error("You are offline. Go online to reorder queue.")
+      return
+    }
     const awaitingQueue = sorted.filter((p) => isRankEditableStatus(p.status?.triage_status))
     const index = awaitingQueue.findIndex((p) => p.id === patientId)
     if (index < 0 || index >= awaitingQueue.length - 1) return
@@ -279,7 +349,12 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       toast.error("Please enter a reason for rank change.")
       return
     }
-    await swapDoctorRanks(current, awaitingQueue[index + 1], trimmed, "MOVE_DOWN", index + 1, index + 2)
+    try {
+      await swapDoctorRanks(current, awaitingQueue[index + 1], trimmed, "MOVE_DOWN", index + 1, index + 2)
+      toast.success("Queue updated.")
+    } catch {
+      toast.error("Could not move patient down. Check permissions and retry.")
+    }
   }
 
   const analyticsPatients = sorted
@@ -294,10 +369,11 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   }, [analyticsPatients])
 
   const riskBuckets = useMemo(() => {
-    const buckets = { High: 0, Medium: 0, Low: 0 }
+    const buckets = { High: 0, Medium: 0, Low: 0, Pending: 0 }
     analyticsPatients.forEach((p) => {
       const score = getPatientRiskScore(p)
-      if (score >= 7) buckets.High += 1
+      if (score == null) buckets.Pending += 1
+      else if (score >= 7) buckets.High += 1
       else if (score >= 4) buckets.Medium += 1
       else buckets.Low += 1
     })
@@ -305,12 +381,18 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   }, [analyticsPatients])
 
   const highRiskPatients = useMemo(() => {
-    return analyticsPatients.filter((p) => getPatientRiskScore(p) >= 7)
+    return analyticsPatients.filter((p) => {
+      const score = getPatientRiskScore(p)
+      return score != null && score >= 7
+    })
   }, [analyticsPatients])
 
   const csvRows = useMemo(() => {
     if (!csvOnlyHighRisk) return analyticsPatients
-    return analyticsPatients.filter((p) => getPatientRiskScore(p) >= 7)
+    return analyticsPatients.filter((p) => {
+      const score = getPatientRiskScore(p)
+      return score != null && score >= 7
+    })
   }, [analyticsPatients, csvOnlyHighRisk])
 
   const dateFilterLabel = useMemo(() => {
@@ -350,10 +432,11 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
     lines.push(headers.join(","))
 
     csvRows.forEach((p) => {
+      const score = getPatientRiskScore(p)
       const row: unknown[] = [
         normalizeName(p.demographics?.name),
         p.sample_id || "-",
-        getPatientRiskScore(p).toFixed(2),
+        score == null ? "PENDING_AI" : score.toFixed(2),
         triageStatusLabel(p.status?.triage_status),
         p.doctor_priority ? "urgent" : "normal",
         p.doctor_rank ?? 0,
@@ -399,12 +482,15 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
   return (
     <div className="min-h-screen p-4 space-y-4 bg-background">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Doctor Triage</h1>
+        <h1 className="text-xl font-semibold">Doctor Queue</h1>
         <div className="flex gap-2">
-          <Button variant={view === "list" ? "default" : "outline"} onClick={() => setView("list")}>List</Button>
-          <Button variant={view === "map" ? "default" : "outline"} onClick={() => setView("map")}>Heatmap</Button>
+          <Button variant={view === "list" ? "default" : "outline"} onClick={() => setView("list")}>Queue</Button>
+          <Button variant={view === "map" ? "default" : "outline"} onClick={() => setView("map")}>Map</Button>
           <Button variant={view === "analytics" ? "default" : "outline"} onClick={() => setView("analytics")}>Analytics</Button>
         </div>
+      </div>
+      <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        AI risk scale is 0-10 (shown with %). High: 7+, Medium: 4-6.9, Low: &lt;4. Same score uses first-come-first-go.
       </div>
 
       <div className="flex flex-wrap gap-2 items-center">
@@ -486,6 +572,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                       const isActionable = isQueueStatus(patient.status?.triage_status)
                       const canMove = isActionable && isRankEditableStatus(patient.status?.triage_status)
                       const isSelected = selectedPatientId === patient.id
+                      const riskScore = getPatientRiskScore(patient)
                       return (
                         <tr
                           key={patient.id}
@@ -493,10 +580,16 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                           onClick={() => setSelectedPatientId(patient.id)}
                         >
                           <td className="p-2 font-semibold">{index + 1}</td>
-                          <td className="p-2">{normalizeName(patient.demographics?.name)}</td>
+                          <td className="p-2">
+                            <div>{normalizeName(patient.demographics?.name)}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {patient.asha_name || patient.asha_id || patient.asha_worker_id || "ASHA Unmapped"}
+                            </div>
+                          </td>
                           <td className="p-2 text-muted-foreground">{patient.sample_id || "-"}</td>
-                          <td className={`p-2 font-medium ${getPatientRiskScore(patient) >= 8 ? "text-red-600" : "text-emerald-600"}`}>
-                            {getPatientRiskScore(patient).toFixed(1)}
+                          <td className={`p-2 font-medium ${riskScore != null && riskScore >= 8 ? "text-red-600" : "text-emerald-600"}`}>
+                            {riskScore == null ? "Awaiting AI" : formatScore(riskScore)}
+                            <div className="text-xs text-muted-foreground">{scoreSeverity(riskScore)}</div>
                           </td>
                           <td className="p-2">
                             <span className={`text-xs px-2 py-0.5 rounded-full ${statusBadge(patient.status?.triage_status)}`}>
@@ -512,6 +605,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                                   size="sm"
                                   variant="outline"
                                   disabled={!canMove}
+                                  title="Move this patient earlier in test queue"
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     moveUp(patient.id)
@@ -523,6 +617,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                                   size="sm"
                                   variant="outline"
                                   disabled={!canMove}
+                                  title="Move this patient later in test queue"
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     moveDown(patient.id)
@@ -533,13 +628,14 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                                 <Button
                                   size="sm"
                                   variant={patient.doctor_priority ? "default" : "outline"}
+                                  title={patient.doctor_priority ? "Already urgent" : "Mark for urgent test handling"}
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     markUrgent(patient.id)
                                   }}
                                   disabled={patient.doctor_priority}
                                 >
-                                  {patient.doctor_priority ? "Urgent" : "Urgent"}
+                                  {patient.doctor_priority ? "Urgent" : "Mark Urgent"}
                                 </Button>
                               </div>
                             )}
@@ -572,7 +668,20 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                 <>
                   <div className="text-base font-semibold">{normalizeName(selectedPatient.demographics?.name)}</div>
                   <div className="text-sm text-muted-foreground">Sample ID: {selectedPatient.sample_id || "-"}</div>
-                  <div className="text-sm">Risk Score: {getPatientRiskScore(selectedPatient).toFixed(1)}</div>
+                  <div className="text-sm text-muted-foreground">
+                    Collected by: {selectedPatient.asha_name || selectedPatient.asha_id || selectedPatient.asha_worker_id || "-"}
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Collected at: {selectedPatient.created_at_offline ? new Date(selectedPatient.created_at_offline).toLocaleString("en-IN") : "-"}
+                  </div>
+                  <div className="text-sm">
+                    {(() => {
+                      const selectedScore = getPatientRiskScore(selectedPatient)
+                      return `Risk Score: ${
+                        selectedScore == null ? "Awaiting AI" : formatScore(selectedScore)
+                      } (${scoreSeverity(selectedScore)})`
+                    })()}
+                  </div>
                   <div className="text-sm">
                     Status: {triageStatusLabel(selectedPatient.status?.triage_status)}
                   </div>
@@ -584,7 +693,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={!isRankEditableStatus(selectedPatient.status?.triage_status)}
+                        disabled={!isOnline || !isRankEditableStatus(selectedPatient.status?.triage_status)}
                         onClick={() => moveUp(selectedPatient.id)}
                       >
                         Move Up
@@ -592,12 +701,12 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={!isRankEditableStatus(selectedPatient.status?.triage_status)}
+                        disabled={!isOnline || !isRankEditableStatus(selectedPatient.status?.triage_status)}
                         onClick={() => moveDown(selectedPatient.id)}
                       >
                         Move Down
                       </Button>
-                      <Button size="sm" onClick={() => markUrgent(selectedPatient.id)} disabled={selectedPatient.doctor_priority}>
+                      <Button size="sm" onClick={() => markUrgent(selectedPatient.id)} disabled={!isOnline || selectedPatient.doctor_priority}>
                         {selectedPatient.doctor_priority ? "Urgent" : "Mark Urgent"}
                       </Button>
                     </div>
@@ -782,7 +891,15 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                       {riskBuckets.map((entry) => (
                         <Cell
                           key={entry.name}
-                          fill={entry.name === "High" ? "#ef4444" : entry.name === "Medium" ? "#f59e0b" : "#10b981"}
+                          fill={
+                            entry.name === "High"
+                              ? "#ef4444"
+                              : entry.name === "Medium"
+                              ? "#f59e0b"
+                              : entry.name === "Pending"
+                              ? "#64748b"
+                              : "#10b981"
+                          }
                         />
                       ))}
                     </Bar>
@@ -807,7 +924,7 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
                       <div>
                         <div className="text-sm font-medium">{normalizeName(p.demographics?.name)}</div>
                         <div className="text-xs text-muted-foreground">
-                          Sample: {p.sample_id || "-"} • Score: {getPatientRiskScore(p).toFixed(1)} • Status:{" "}
+                          Sample: {p.sample_id || "-"} • Score: {formatScore(getPatientRiskScore(p) as number)} • Status:{" "}
                           {triageStatusLabel(p.status?.triage_status)}
                         </div>
                       </div>

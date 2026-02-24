@@ -114,6 +114,122 @@ def _risk_level(score: float) -> str:
     return "LOW"
 
 
+def _is_yes(value: Any) -> bool:
+    return str(value).strip().upper() in {"YES", "Y", "TRUE", "1"}
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        numeric = float(value)
+        if np.isnan(numeric):
+            return None
+        return numeric
+    except Exception:
+        return None
+
+
+def _build_rule_actions(patient_doc: Dict[str, Any], final_score: float) -> Tuple[List[str], List[str]]:
+    risk_level = _risk_level(final_score)
+    clinical = patient_doc.get("clinical") if isinstance(patient_doc.get("clinical"), dict) else {}
+    symptoms = patient_doc.get("symptoms") if isinstance(patient_doc.get("symptoms"), list) else []
+
+    cough_nature = _to_upper(clinical.get("cough_nature"))
+    cough_days = _safe_float(clinical.get("cough_duration_days"))
+    high_temp_c = _safe_float(clinical.get("body_temperature_c"))
+    weight_loss = _is_yes(clinical.get("weight_loss"))
+    night_sweats = _is_yes(clinical.get("night_sweats"))
+    has_blood = cough_nature == "BLOOD_STAINED"
+    has_high_fever = high_temp_c is not None and high_temp_c >= 38.5
+    has_long_cough = cough_days is not None and cough_days >= 14
+
+    physical_signs = clinical.get("physical_signs") if isinstance(clinical.get("physical_signs"), list) else []
+    signs = {str(item).strip().lower() for item in physical_signs if isinstance(item, str)}
+    has_short_breath = "shortnessofbreath" in {re.sub(r"[^a-z0-9]", "", s) for s in signs}
+
+    # Support legacy symptom arrays as fallback.
+    symptom_codes = {
+        str(item.get("symptom_code", "")).strip().upper()
+        for item in symptoms
+        if isinstance(item, dict)
+    }
+    if "HEMOPTYSIS" in symptom_codes:
+        has_blood = True
+    if "COUGH" in symptom_codes and cough_days is None:
+        has_long_cough = True
+
+    red_flag = has_blood or has_short_breath
+
+    en: List[str] = []
+    hi: List[str] = []
+
+    if red_flag:
+        en.append(
+            "Red-flag symptoms are present. Refer the patient urgently to the nearest PHC/CHC or district hospital today."
+        )
+        hi.append(
+            "उच्च-जोखिम लक्षण मौजूद हैं। मरीज को आज ही निकटतम PHC/CHC या जिला अस्पताल में तुरंत रेफर करें।"
+        )
+
+    if risk_level == "HIGH":
+        en.extend(
+            [
+                "Arrange same-day TB diagnostic testing (sputum + NAAT/Truenat/Xpert as per facility protocol) at the nearest government center.",
+                "Until evaluation, use source control: wear a mask, follow cough etiquette, and keep rooms well ventilated.",
+                "Prioritize this case in the testing queue and ensure ASHA follow-up call the same day.",
+            ]
+        )
+        hi.extend(
+            [
+                "निकटतम सरकारी केंद्र में आज ही टीबी जांच (थूक + NAAT/Truenat/Xpert, सुविधा प्रोटोकॉल अनुसार) कराएं।",
+                "जांच तक स्रोत-नियंत्रण अपनाएं: मास्क पहनें, खांसी शिष्टाचार रखें और कमरे में पर्याप्त हवा/वेंटिलेशन रखें।",
+                "इस केस को जांच कतार में प्राथमिकता दें और ASHA द्वारा उसी दिन फॉलो-अप कॉल सुनिश्चित करें।",
+            ]
+        )
+    elif risk_level == "MEDIUM":
+        en.extend(
+            [
+                "Schedule TB diagnostic testing within 24-48 hours at the nearest PHC/TU.",
+                "Continue mask use and cough hygiene, and reduce close indoor contact with children, elderly, or immunocompromised family members.",
+                "If symptoms worsen (especially blood in sputum, persistent fever, or breathlessness), escalate to urgent referral.",
+            ]
+        )
+        hi.extend(
+            [
+                "निकटतम PHC/TU में 24-48 घंटों के भीतर टीबी जांच की व्यवस्था करें।",
+                "मास्क और खांसी शिष्टाचार जारी रखें, तथा बच्चों, बुजुर्गों और कम प्रतिरक्षा वाले परिवारजनों से नजदीकी बंद संपर्क कम करें।",
+                "यदि लक्षण बढ़ें (खासतौर पर खून वाली खांसी, लगातार बुखार, या सांस फूलना), तो तुरंत रेफरल करें।",
+            ]
+        )
+    else:
+        en.extend(
+            [
+                "Maintain symptom monitoring and ASHA follow-up; re-evaluate promptly if cough persists for 2 weeks or more.",
+                "Keep cough hygiene and household ventilation practices active.",
+                "If blood in sputum, persistent fever, weight loss, or night sweats are present, move to fast-track TB testing.",
+            ]
+        )
+        hi.extend(
+            [
+                "लक्षणों की निगरानी और ASHA फॉलो-अप जारी रखें; यदि खांसी 2 सप्ताह या अधिक रहे तो तुरंत पुनर्मूल्यांकन करें।",
+                "खांसी शिष्टाचार और घर में वेंटिलेशन की आदतें जारी रखें।",
+                "यदि खून वाली खांसी, लगातार बुखार, वजन घटना या रात में पसीना हो, तो टीबी जांच को फास्ट-ट्रैक करें।",
+            ]
+        )
+
+    # Symptom-specific augmentation to keep advice actionable in field settings.
+    if has_long_cough and not any("2 weeks" in item for item in en):
+        en.append("Persistent cough for 2 weeks or more warrants presumptive TB work-up as per program guidance.")
+        hi.append("2 सप्ताह या अधिक की लगातार खांसी में कार्यक्रम दिशानिर्देश अनुसार संभावित टीबी की जांच करें।")
+    if has_high_fever or weight_loss or night_sweats:
+        en.append("Document fever/weight-loss/night-sweats in referral notes to support faster triage at facility level.")
+        hi.append("फीवर/वजन घटना/रात में पसीना रेफरल नोट में लिखें ताकि केंद्र स्तर पर तेज ट्रायेज हो सके।")
+
+    # Keep concise and deterministic for UI rendering.
+    return en[:5], hi[:5]
+
+
 def _clean_llm_output(prompt: str, output: str, *, language: str) -> str:
     text = str(output or "").replace(prompt, "")
     text = text.replace("<end_of_turn>", "")
@@ -260,6 +376,7 @@ def run_tb_inference(
         final_score=final_score,
         medgemma=model_bundle.medgemma,
     )
+    actions_en, actions_hi = _build_rule_actions(patient_doc, final_score)
 
     return {
         "hear_score": round(prob_a, 4),
@@ -267,6 +384,9 @@ def run_tb_inference(
         "risk_level": _risk_level(final_score),
         "medgemini_summary_en": summary_en,
         "medgemini_summary_hi": summary_hi,
+        "action_items_en": actions_en,
+        "action_items_hi": actions_hi,
+        "actions_source": "rule_based_v1",
         "model_version": model_version,
         "clinical_score": round(prob_m, 4),
     }

@@ -27,7 +27,6 @@ import {
 import {
   Activity,
   AlertTriangle,
-  Calendar,
   CheckCircle2,
   CloudOff,
   LogOut,
@@ -62,7 +61,7 @@ interface DashboardScreenProps {
   gpsLocation: GPSLocation
 }
 
-type FilterType = "all" | "critical" | "needsSync" | "testScheduled" | "completed"
+type FilterType = "all" | "critical" | "needsSync" | "completed"
 
 export function DashboardScreen({
   ashaId,
@@ -83,6 +82,9 @@ export function DashboardScreen({
   const [showOfflineWarning, setShowOfflineWarning] = useState(false)
   const stats = getStats(patients)
   const hasPendingSync = pendingUploads > 0
+  const hasAiResult = (patient: Patient) =>
+    patient.aiStatus === "success" ||
+    Boolean(patient.medGemmaReasoning || patient.medGemmaReasoningI18n?.en || patient.medGemmaReasoningI18n?.hi || patient.hearAudioScore != null)
 
   const filteredPatients = useMemo(() => {
     let filtered = patients
@@ -90,13 +92,10 @@ export function DashboardScreen({
     // Apply status filter
     switch (filter) {
       case "critical":
-        filtered = filtered.filter((patient) => patient.riskLevel === "high")
+        filtered = filtered.filter((patient) => hasAiResult(patient) && patient.riskScore >= 7)
         break
       case "needsSync":
         filtered = filtered.filter((patient) => patient.needsSync)
-        break
-      case "testScheduled":
-        filtered = filtered.filter((patient) => patient.testScheduled || Boolean(patient.scheduledTestDate))
         break
       case "completed":
         filtered = filtered.filter(
@@ -110,7 +109,16 @@ export function DashboardScreen({
       filtered = filtered.filter((patient) => patient.collectionDate === dateFilter)
     }
 
-    return filtered
+    return [...filtered].sort((a, b) => {
+      const aHasAi = hasAiResult(a)
+      const bHasAi = hasAiResult(b)
+      if (aHasAi !== bHasAi) return aHasAi ? -1 : 1
+      if (aHasAi && bHasAi && b.riskScore !== a.riskScore) return b.riskScore - a.riskScore
+      const aTime = new Date(a.collectionDate || a.createdAt).getTime()
+      const bTime = new Date(b.collectionDate || b.createdAt).getTime()
+      if (aTime !== bTime) return aTime - bTime
+      return a.id.localeCompare(b.id)
+    })
   }, [patients, filter, dateFilter])
 
   const handleLogoutClick = () => {
@@ -121,7 +129,10 @@ export function DashboardScreen({
     }
   }
 
-  const getRiskBadgeStyle = (level: RiskLevel) => {
+  const getRiskBadgeStyle = (level: RiskLevel, aiReady: boolean) => {
+    if (!aiReady) {
+      return "bg-slate-500 hover:bg-slate-600 text-white"
+    }
     switch (level) {
       case "high":
         return "bg-red-500 hover:bg-red-600 text-white"
@@ -156,11 +167,8 @@ export function DashboardScreen({
     }
   }
 
-  // Get unique dates from patients for date filter
-  const uniqueDates = useMemo(() => {
-    const dates = [...new Set(patients.map((p) => p.collectionDate))]
-    return dates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
-  }, [patients])
+  const formatScore = (score: number, aiReady: boolean) =>
+    aiReady ? `${score.toFixed(1)} / 10 (${Math.round(score * 10)}%)` : language === "en" ? "Awaiting AI" : "एआई की प्रतीक्षा"
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -170,7 +178,7 @@ export function DashboardScreen({
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
             <Activity className="h-5 w-5 text-primary-foreground" />
           </div>
-          <span className="font-semibold text-foreground hidden sm:block">{t.appName}</span>
+          <span className="text-lg font-semibold text-foreground sm:text-xl">{t.appName}</span>
         </div>
         <div className="flex items-center gap-2">
           <LanguageSwitcher />
@@ -220,10 +228,10 @@ export function DashboardScreen({
       <div className="bg-primary text-primary-foreground px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-sm opacity-90">
+            <p className="text-lg font-semibold opacity-95">
               {t.welcome}, {ashaName || ashaId || (language === "en" ? "ASHA Worker" : "आशा कार्यकर्ता")}
             </p>
-            <p className="flex items-center gap-1.5 text-xs opacity-75">
+            <p className="flex items-center gap-1.5 text-sm opacity-80">
               <MapPin className="h-3.5 w-3.5" />
               {gpsLocation.latitude && gpsLocation.longitude
                 ? `${gpsLocation.latitude.toFixed(4)}, ${gpsLocation.longitude.toFixed(4)}`
@@ -249,13 +257,13 @@ export function DashboardScreen({
       {/* Main Content */}
       <main className="flex-1 p-4 pb-24 space-y-4">
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Card
             className="cursor-pointer hover:shadow-md transition-shadow border-l-4 border-l-red-500"
             onClick={onViewPriority}
           >
             <CardHeader className="p-3 pb-1">
-              <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
                 {t.highRiskPatients}
               </CardTitle>
@@ -271,7 +279,7 @@ export function DashboardScreen({
               onClick={() => setFilter("needsSync")}
             >
               <CardHeader className="p-3 pb-1">
-                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
                   <RefreshCw className="h-3.5 w-3.5 text-amber-500" />
                   {t.pendingUploads}
                 </CardTitle>
@@ -283,7 +291,7 @@ export function DashboardScreen({
           ) : (
             <Card className="border-l-4 border-l-emerald-500">
               <CardHeader className="p-3 pb-1">
-                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
                   {language === "en" ? "All Synced" : "सभी सिंक हो चुके हैं"}
                 </CardTitle>
@@ -294,26 +302,17 @@ export function DashboardScreen({
             </Card>
           )}
 
-          <Card
-            className="border-l-4 border-l-sky-500 cursor-pointer"
-            onClick={() => setFilter("testScheduled")}
-          >
-            <CardHeader className="p-3 pb-1">
-              <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-                <Calendar className="h-3.5 w-3.5 text-sky-500" />
-                {t.testsScheduledToday}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-3 pt-0">
-              <p className="text-2xl font-bold text-sky-600">{stats.testsToday}</p>
-            </CardContent>
-          </Card>
         </div>
 
         {/* Patient List */}
         <Card>
           <CardHeader className="p-4 pb-2">
             <CardTitle className="text-lg font-semibold">{t.patientList}</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              {language === "en"
+                ? "Ranking: higher score first (0-10 scale). If score ties, earlier collected patient stays ahead."
+                : "रैंकिंग: उच्च स्कोर पहले (0-10 स्केल)। समान स्कोर पर पहले संग्रहित मरीज आगे रहेगा।"}
+            </p>
             {/* Filters */}
             <div className="space-y-3 pt-2">
               {/* Status Filters */}
@@ -324,7 +323,6 @@ export function DashboardScreen({
                   ...((!isOnline || hasPendingSync)
                     ? [{ key: "needsSync" as FilterType, label: t.needsSync }]
                     : []),
-                  { key: "testScheduled" as FilterType, label: t.testScheduled },
                   { key: "completed" as FilterType, label: language === "en" ? "Completed" : "पूर्ण" },
                 ].map((item) => (
                   <Button
@@ -367,25 +365,39 @@ export function DashboardScreen({
           </CardHeader>
           <CardContent className="p-0">
             <div className="space-y-2 p-3 md:hidden">
-              {filteredPatients.map((patient) => (
+              {filteredPatients.map((patient, index) => (
                 <button
                   key={patient.id}
                   type="button"
                   className="w-full rounded-lg border bg-background p-3 text-left shadow-sm transition-colors hover:bg-muted/40"
                   onClick={() => onViewPatient(patient)}
                 >
+                  {(() => {
+                    const aiReady = hasAiResult(patient)
+                    return (
+                      <>
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="font-medium">{language === "en" ? patient.name : patient.nameHi}</div>
                       <div className="text-xs text-muted-foreground">{patient.sampleId || "-"}</div>
                     </div>
-                    <Badge className={getRiskBadgeStyle(patient.riskLevel)}>{getRiskLabel(patient.riskLevel)}</Badge>
+                    <Badge className={getRiskBadgeStyle(patient.riskLevel, aiReady)}>
+                      {aiReady ? getRiskLabel(patient.riskLevel) : language === "en" ? "Awaiting AI" : "एआई प्रतीक्षा"}
+                    </Badge>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                    <div>{language === "en" ? patient.village : patient.villageHi}</div>
+                    <div>
+                      #{index + 1} • {language === "en" ? patient.village : patient.villageHi}
+                    </div>
                     <div className="text-right">{new Date(patient.collectionDate).toLocaleDateString(language === "en" ? "en-IN" : "hi-IN")}</div>
                   </div>
-                  <div className="mt-2 text-xs text-muted-foreground">{getStatusLabel(patient.status)}</div>
+                  <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>{getStatusLabel(patient.status)}</span>
+                    <span className="font-medium text-foreground">{formatScore(patient.riskScore, aiReady)}</span>
+                  </div>
+                      </>
+                    )
+                  })()}
                 </button>
               ))}
               {filteredPatients.length === 0 && (
@@ -398,6 +410,7 @@ export function DashboardScreen({
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="font-semibold">Rank</TableHead>
                     <TableHead className="font-semibold">{t.name}</TableHead>
                     <TableHead className="font-semibold">Sample ID</TableHead>
                     <TableHead className="font-semibold">{t.village}</TableHead>
@@ -407,12 +420,13 @@ export function DashboardScreen({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredPatients.map((patient) => (
+                  {filteredPatients.map((patient, index) => (
                     <TableRow
                       key={patient.id}
                       className="cursor-pointer hover:bg-muted/50"
                       onClick={() => onViewPatient(patient)}
                     >
+                      <TableCell className="font-semibold">{index + 1}</TableCell>
                       <TableCell className="font-medium">
                         {language === "en" ? patient.name : patient.nameHi}
                       </TableCell>
@@ -428,9 +442,12 @@ export function DashboardScreen({
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge className={getRiskBadgeStyle(patient.riskLevel)}>
-                          {getRiskLabel(patient.riskLevel)}
-                        </Badge>
+                        <div className="flex flex-col gap-1">
+                          <Badge className={getRiskBadgeStyle(patient.riskLevel, hasAiResult(patient))}>
+                            {hasAiResult(patient) ? getRiskLabel(patient.riskLevel) : language === "en" ? "Awaiting AI" : "एआई प्रतीक्षा"}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">{formatScore(patient.riskScore, hasAiResult(patient))}</span>
+                        </div>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {getStatusLabel(patient.status)}
@@ -439,7 +456,7 @@ export function DashboardScreen({
                   ))}
                   {filteredPatients.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                         {language === "en" ? "No patients found" : "कोई मरीज़ नहीं मिला"}
                       </TableCell>
                     </TableRow>
@@ -456,10 +473,10 @@ export function DashboardScreen({
         <Button
           onClick={onNewScreening}
           size="lg"
-          className="h-14 w-14 rounded-full shadow-lg hover:shadow-xl transition-shadow bg-emerald-600 hover:bg-emerald-700"
+          className="h-14 rounded-full px-5 shadow-lg hover:shadow-xl transition-shadow bg-emerald-600 hover:bg-emerald-700 gap-2 text-base font-semibold"
         >
-          <Plus className="h-6 w-6" />
-          <span className="sr-only">{t.newScreening}</span>
+          <Plus className="h-7 w-7" />
+          <span>{language === "en" ? "Add Patient" : "मरीज जोड़ें"}</span>
         </Button>
       </div>
 

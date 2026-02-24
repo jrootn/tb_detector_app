@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
+import Link from "next/link"
 import { collection, onSnapshot, query } from "firebase/firestore"
 import {
   Bar,
@@ -63,15 +64,37 @@ interface PatientRecord {
   ai?: { risk_score?: number; risk_level?: string; medgemini_summary?: string }
   gps?: { lat?: number; lng?: number }
   demographics?: { name?: string; village?: string; pincode?: string }
+  asha_name?: string
+  asha_id?: string
+  asha_worker_id?: string
   synced_at?: string
   created_at_offline?: string
 }
 
+function getAiRiskScore(patient: PatientRecord): number | null {
+  const raw = patient.ai?.risk_score
+  const numeric = typeof raw === "number" ? raw : Number(raw)
+  if (!Number.isFinite(numeric)) return null
+  return normalizeAiRiskScore(numeric)
+}
+
 function patientPriorityScore(patient: PatientRecord): number {
-  const risk = normalizeAiRiskScore(patient.ai?.risk_score)
+  const risk = getAiRiskScore(patient) ?? 0
   const status = normalizeTriageStatus(patient.status?.triage_status)
   const statusBoost = status === "TEST_QUEUED" ? 1.5 : status === "AI_TRIAGED" ? 1.1 : 0
   return Number((risk + statusBoost).toFixed(2))
+}
+
+function formatRiskDisplay(score: number | null): string {
+  if (score == null) return "Awaiting AI"
+  return `${score.toFixed(1)} / 10 (${Math.round(score * 10)}%)`
+}
+
+function formatCollectedAt(value?: string): string {
+  if (!value) return "-"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString("en-IN")
 }
 
 export function AdminDashboard() {
@@ -79,7 +102,7 @@ export function AdminDashboard() {
   const [patients, setPatients] = useState<PatientRecord[]>([])
   const [facilities, setFacilities] = useState<FacilityRecord[]>([])
 
-  const [view, setView] = useState<"overview" | "map" | "analytics">("overview")
+  const [view, setView] = useState<"overview" | "patients" | "map" | "analytics">("overview")
   const [facilityFilter, setFacilityFilter] = useState<string>("all")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "week" | "30days" | "date">("all")
@@ -194,12 +217,26 @@ export function AdminDashboard() {
     })
   }, [patients, facilityFilter, statusFilter, dateFilter, specificDate, search])
 
+  const sortedPatients = useMemo(() => {
+    return [...filteredPatients].sort((a, b) => {
+      const aScore = getAiRiskScore(a)
+      const bScore = getAiRiskScore(b)
+      if (aScore == null && bScore != null) return 1
+      if (aScore != null && bScore == null) return -1
+      if (aScore != null && bScore != null && bScore !== aScore) return bScore - aScore
+      const aTime = new Date(a.created_at_offline || "").getTime()
+      const bTime = new Date(b.created_at_offline || "").getTime()
+      if (!Number.isNaN(aTime) && !Number.isNaN(bTime) && aTime !== bTime) return aTime - bTime
+      return a.id.localeCompare(b.id)
+    })
+  }, [filteredPatients])
+
   const highRiskPending = useMemo(() => {
     return filteredPatients
       .filter((p) => {
-        const risk = normalizeAiRiskScore(p.ai?.risk_score)
+        const risk = getAiRiskScore(p)
         const status = normalizeTriageStatus(p.status?.triage_status)
-        return risk >= 7 && (status === "AI_TRIAGED" || status === "TEST_QUEUED")
+        return risk != null && risk >= 7 && (status === "AI_TRIAGED" || status === "TEST_QUEUED")
       })
       .sort((a, b) => patientPriorityScore(b) - patientPriorityScore(a))
       .slice(0, 15)
@@ -259,10 +296,11 @@ export function AdminDashboard() {
   }, [filteredPatients])
 
   const riskBuckets = useMemo(() => {
-    const buckets = { High: 0, Medium: 0, Low: 0 }
+    const buckets = { High: 0, Medium: 0, Low: 0, Pending: 0 }
     filteredPatients.forEach((p) => {
-      const score = normalizeAiRiskScore(p.ai?.risk_score)
-      if (score >= 7) buckets.High += 1
+      const score = getAiRiskScore(p)
+      if (score == null) buckets.Pending += 1
+      else if (score >= 7) buckets.High += 1
       else if (score >= 4) buckets.Medium += 1
       else buckets.Low += 1
     })
@@ -280,7 +318,10 @@ export function AdminDashboard() {
 
   const csvRows = useMemo(() => {
     if (!csvOnlyHighRisk) return filteredPatients
-    return filteredPatients.filter((p) => normalizeAiRiskScore(p.ai?.risk_score) >= 7)
+    return filteredPatients.filter((p) => {
+      const score = getAiRiskScore(p)
+      return score != null && score >= 7
+    })
   }, [filteredPatients, csvOnlyHighRisk])
 
   const exportCsv = () => {
@@ -315,6 +356,7 @@ export function AdminDashboard() {
     )
 
     csvRows.forEach((p) => {
+      const score = getAiRiskScore(p)
       lines.push(
         [
           p.id,
@@ -323,7 +365,7 @@ export function AdminDashboard() {
           p.demographics?.village || "",
           p.demographics?.pincode || "",
           p.facility_name || p.facility_id || "",
-          normalizeAiRiskScore(p.ai?.risk_score).toFixed(2),
+          score == null ? "PENDING_AI" : score.toFixed(2),
           p.ai?.risk_level || "",
           normalizeTriageStatus(p.status?.triage_status),
           p.assigned_doctor_id || "",
@@ -353,6 +395,9 @@ export function AdminDashboard() {
         </div>
         <div className="flex gap-2">
           <Button variant={view === "overview" ? "default" : "outline"} onClick={() => setView("overview")}>Overview</Button>
+          <Button variant={view === "patients" ? "default" : "outline"} onClick={() => setView("patients")}>
+            Patients
+          </Button>
           <Button variant={view === "map" ? "default" : "outline"} onClick={() => setView("map")}>
             <MapPinned className="h-4 w-4 mr-1" />Map
           </Button>
@@ -504,7 +549,7 @@ export function AdminDashboard() {
                       <td className="p-2">{p.demographics?.name || "Unknown"}</td>
                       <td className="p-2">{p.sample_id || "-"}</td>
                       <td className="p-2">{facilityMap[p.facility_id || ""]?.name || p.facility_id || "-"}</td>
-                      <td className="p-2">{normalizeAiRiskScore(p.ai?.risk_score).toFixed(1)}</td>
+                      <td className="p-2">{formatRiskDisplay(getAiRiskScore(p))}</td>
                       <td className="p-2">{triageStatusLabel(p.status?.triage_status)}</td>
                       <td className="p-2 font-semibold">{patientPriorityScore(p).toFixed(2)}</td>
                     </tr>
@@ -554,6 +599,57 @@ export function AdminDashboard() {
             </CardContent>
           </Card>
         </>
+      )}
+
+      {view === "patients" && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Patient List (Filtered)</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="max-h-[72vh] overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-muted/50">
+                  <tr className="border-b">
+                    <th className="p-2 text-left">Sample</th>
+                    <th className="p-2 text-left">Patient</th>
+                    <th className="p-2 text-left">Facility</th>
+                    <th className="p-2 text-left">Collected By</th>
+                    <th className="p-2 text-left">Collected At</th>
+                    <th className="p-2 text-left">AI Risk</th>
+                    <th className="p-2 text-left">Status</th>
+                    <th className="p-2 text-left">Profile</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedPatients.map((patient) => (
+                    <tr key={patient.id} className="border-b hover:bg-muted/30">
+                      <td className="p-2">{patient.sample_id || "-"}</td>
+                      <td className="p-2">{patient.demographics?.name || "Unknown"}</td>
+                      <td className="p-2">{patient.facility_name || patient.facility_id || "-"}</td>
+                      <td className="p-2">{patient.asha_name || patient.asha_id || patient.asha_worker_id || "-"}</td>
+                      <td className="p-2">{formatCollectedAt(patient.created_at_offline)}</td>
+                      <td className="p-2">{formatRiskDisplay(getAiRiskScore(patient))}</td>
+                      <td className="p-2">{triageStatusLabel(patient.status?.triage_status)}</td>
+                      <td className="p-2">
+                        <Button asChild variant="outline" size="sm">
+                          <Link href={`/admin/patient/${patient.id}`}>Open</Link>
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                  {sortedPatients.length === 0 && (
+                    <tr>
+                      <td className="p-4 text-center text-muted-foreground" colSpan={8}>
+                        No patients found for current filters.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {view === "map" && !isOnline && (
@@ -646,7 +742,15 @@ export function AdminDashboard() {
                       {riskBuckets.map((entry) => (
                         <Cell
                           key={entry.name}
-                          fill={entry.name === "High" ? "#ef4444" : entry.name === "Medium" ? "#f59e0b" : "#10b981"}
+                          fill={
+                            entry.name === "High"
+                              ? "#ef4444"
+                              : entry.name === "Medium"
+                              ? "#f59e0b"
+                              : entry.name === "Pending"
+                              ? "#64748b"
+                              : "#10b981"
+                          }
                         />
                       ))}
                     </Bar>

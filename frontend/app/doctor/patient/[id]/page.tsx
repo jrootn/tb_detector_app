@@ -34,6 +34,10 @@ interface PatientRecord {
   doctor_instructions?: string
   prescription?: string
   sample_id?: string
+  created_at_offline?: string
+  asha_name?: string
+  asha_id?: string
+  asha_worker_id?: string
   doctor_files?: { name: string; url?: string; storage_path?: string; mime_type?: string; uploaded_at: string }[]
   lab_results?: {
     report_uri?: string
@@ -54,6 +58,13 @@ function fileKind(name?: string): "image" | "audio" | "pdf" | "other" {
   if (/\.(mp3|wav|ogg|webm|m4a)$/.test(lower)) return "audio"
   if (/\.pdf$/.test(lower)) return "pdf"
   return "other"
+}
+
+function getAiRiskScore(patient: PatientRecord): number | null {
+  const raw = patient.ai?.risk_score
+  const numeric = typeof raw === "number" ? raw : Number(raw)
+  if (!Number.isFinite(numeric)) return null
+  return normalizeAiRiskScore(numeric)
 }
 
 export default function DoctorPatientPage() {
@@ -208,6 +219,13 @@ export default function DoctorPatientPage() {
   if (!patient) return <div className="p-6">Loading...</div>
 
   const currentStatus = normalizeTriageStatus(patient.status?.triage_status)
+  const aiRiskScore = getAiRiskScore(patient)
+  const collectedAtLabel = (() => {
+    if (!patient.created_at_offline) return "-"
+    const date = new Date(patient.created_at_offline)
+    if (Number.isNaN(date.getTime())) return patient.created_at_offline
+    return date.toLocaleString("en-IN")
+  })()
   const statusLabelMap: Record<string, string> = {
     COLLECTED: "Collected",
     SYNCED: "Synced",
@@ -253,9 +271,11 @@ export default function DoctorPatientPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="text-sm text-muted-foreground">Sample ID: {patient.sample_id || "-"}</div>
+          <div className="text-sm">Collected by: {patient.asha_name || patient.asha_id || patient.asha_worker_id || "-"}</div>
+          <div className="text-sm">Collected at: {collectedAtLabel}</div>
           <div className="text-sm">Phone: {patient.demographics?.phone || "-"}</div>
           <div className="text-sm">Age: {patient.demographics?.age || "-"}</div>
-          <div className="text-sm">Risk: {normalizeAiRiskScore(patient.ai?.risk_score).toFixed(1)}</div>
+          <div className="text-sm">Risk: {aiRiskScore == null ? "Awaiting AI" : `${aiRiskScore.toFixed(1)} / 10 (${Math.round(aiRiskScore * 10)}%)`}</div>
           <div className="text-sm">AI Summary: {getAiSummaryText(patient.ai, "en") || "-"}</div>
         </CardContent>
       </Card>

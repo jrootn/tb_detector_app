@@ -22,6 +22,7 @@ This folder contains a production-ready backend scaffold for TB inference in clo
 - Retries handled by Cloud Tasks; endpoint returns 5xx only for transient/server failures.
 - Supports both `audio[].storage_uri` and `audio[].storage_path`.
 - Supports bilingual summaries: English + Hindi.
+- Supports bilingual deterministic action items derived from risk/symptom rules (`ai.action_items_*`), not free-form LLM actions.
 
 ## Deploy order
 
@@ -37,5 +38,5 @@ Or use the Workbench quickstart:
 
 ## Notes
 
-- The inference service is wired for the real HEAR + classical + MedGemma pipeline.
+- The inference service is wired for the real HEAR + classical + MedGemma pipeline (MedGemma for summary generation; action recommendations are rule-based).
 - Ensure model artifacts exist in your configured GCS prefixes (or are baked into image/local paths) before deployment.

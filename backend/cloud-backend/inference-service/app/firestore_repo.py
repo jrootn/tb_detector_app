@@ -51,6 +51,8 @@ def get_patient(patient_id: str) -> Optional[Dict[str, Any]]:
 
 
 def write_success(patient_id: str, payload: Dict[str, Any]) -> None:
+    action_items_en = payload.get("action_items_en") or []
+    action_items_hi = payload.get("action_items_hi") or []
     patient_ref(patient_id).update(
         {
             "ai.hear_score": payload["hear_score"],
@@ -64,6 +66,13 @@ def write_success(patient_id: str, payload: Dict[str, Any]) -> None:
             },
             # Backward compatibility for existing consumers that still read a single summary string.
             "ai.medgemini_summary": payload["medgemini_summary_en"],
+            "ai.action_items_en": action_items_en,
+            "ai.action_items_hi": action_items_hi,
+            "ai.action_items_i18n": {
+                "en": action_items_en,
+                "hi": action_items_hi,
+            },
+            "ai.actions_source": payload.get("actions_source", "rule_based_v1"),
             "ai.generated_at": firestore.SERVER_TIMESTAMP,
             "ai.model_version": payload["model_version"],
             "ai.inference_status": "SUCCESS",

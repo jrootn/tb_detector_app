@@ -31,6 +31,9 @@ export default function DoctorPage() {
           router.replace("/login")
           return
         }
+        localStorage.setItem("user_role", "DOCTOR")
+        localStorage.setItem("user_uid", user.uid)
+        localStorage.setItem("user_name", snap.data()?.name || "Doctor")
         setDoctorName(snap.data()?.name || "Doctor")
         setDoctorUid(user.uid)
         setDoctorFacilityId(snap.data()?.facility_id || snap.data()?.assigned_center || "")
@@ -77,6 +80,9 @@ export default function DoctorPage() {
             onClick={async () => {
               if (!isOnline) return
               await signOut(auth)
+              localStorage.removeItem("user_role")
+              localStorage.removeItem("user_name")
+              localStorage.removeItem("user_uid")
               router.replace("/login")
             }}
             disabled={!isOnline}

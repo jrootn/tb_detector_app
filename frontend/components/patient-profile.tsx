@@ -131,6 +131,29 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
     }
     return i18n?.en || p.medGemmaReasoning || i18n?.hi || ""
   }
+
+  const aiReady =
+    patient.aiStatus === "success" ||
+    Boolean(patient.medGemmaReasoning || patient.medGemmaReasoningI18n?.en || patient.medGemmaReasoningI18n?.hi || patient.hearAudioScore != null)
+  const collectorDisplayName = (() => {
+    if (patient.ashaName) return patient.ashaName
+    if (typeof window !== "undefined") {
+      const localCollectorName = localStorage.getItem("user_name")
+      if (localCollectorName) return localCollectorName
+    }
+    return patient.ashaId || "-"
+  })()
+  const collectedAtLabel = (() => {
+    const raw = patient.collectedAt || patient.createdAt
+    if (!raw) return "-"
+    const d = new Date(raw)
+    if (Number.isNaN(d.getTime())) return raw
+    return d.toLocaleString(language === "en" ? "en-IN" : "hi-IN")
+  })()
+  const aiActionItems = (() => {
+    const items = language === "hi" ? patient.aiActionItemsI18n?.hi || patient.aiActionItemsI18n?.en : patient.aiActionItemsI18n?.en || patient.aiActionItemsI18n?.hi
+    return Array.isArray(items) ? items.filter(Boolean) : []
+  })()
   
   const stages = [
     { key: "collected", label: t.collected, help: t.collectedHelp, done: true },
@@ -146,17 +169,6 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
       label: t.doctorReviewed,
       help: t.doctorReviewedHelp,
       done: patient.status !== "awaitingDoctor",
-    },
-    {
-      key: "scheduled",
-      label: t.testScheduledLabel,
-      help: t.testScheduledHelp,
-      done: Boolean(
-        patient.testScheduled ||
-          patient.status === "testPending" ||
-          patient.status === "underTreatment" ||
-          patient.status === "cleared"
-      ),
     },
     {
       key: "completed",
@@ -221,11 +233,17 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
             <p className="text-sm text-muted-foreground">{patient.phone}</p>
           </div>
           <div className="text-right">
-            <Badge className={`${getRiskBadgeStyle(patient.riskLevel)} text-lg px-3 py-1`}>
-              {patient.riskScore}/10
+            <Badge className={`${aiReady ? getRiskBadgeStyle(patient.riskLevel) : "bg-slate-500 text-white"} text-lg px-3 py-1`}>
+              {aiReady ? `${patient.riskScore}/10` : language === "en" ? "AI Pending" : "एआई प्रतीक्षा"}
             </Badge>
-            <p className="text-sm font-medium mt-1">{getRiskLabel(patient.riskLevel)} {t.riskScore}</p>
+            <p className="text-sm font-medium mt-1">
+              {aiReady ? `${getRiskLabel(patient.riskLevel)} ${t.riskScore}` : language === "en" ? "Awaiting AI risk score" : "एआई जोखिम स्कोर की प्रतीक्षा"}
+            </p>
           </div>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-1.5 text-sm text-muted-foreground sm:grid-cols-2">
+          <p>{language === "en" ? "Collected by" : "नमूना संग्रहकर्ता"}: {collectorDisplayName}</p>
+          <p>{language === "en" ? "Collected at" : "संग्रह समय"}: {collectedAtLabel}</p>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -387,7 +405,7 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
               <CardContent>
                 <div className="flex items-center gap-4">
                   <div className="text-3xl font-bold text-foreground">
-                    {patient.hearAudioScore?.toFixed(2) || "0.00"}
+                    {patient.hearAudioScore != null ? patient.hearAudioScore.toFixed(2) : "--"}
                   </div>
                   <div className="flex-1">
                     <div className="h-3 bg-muted rounded-full overflow-hidden">
@@ -403,7 +421,11 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
                       />
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {(patient.hearAudioScore || 0) > 0.7
+                      {!aiReady
+                        ? language === "en"
+                          ? "AI is still processing this case."
+                          : "इस केस के लिए एआई अभी प्रोसेस कर रहा है।"
+                        : (patient.hearAudioScore || 0) > 0.7
                         ? language === "en"
                           ? "High probability of lung abnormality"
                           : "फेफड़ों की असामान्यता की उच्च संभावना"
@@ -428,6 +450,15 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
                 </CardTitle>
               </CardHeader>
               <CardContent>
+                <div className="mb-2 text-xs text-muted-foreground">
+                  {aiReady
+                    ? language === "en"
+                      ? "AI recommendations are ready."
+                      : "एआई सिफारिशें तैयार हैं।"
+                    : language === "en"
+                    ? "No AI summary yet. Keep baseline precautions active."
+                    : "एआई सारांश अभी नहीं है। बेसलाइन सावधानियां जारी रखें।"}
+                </div>
                 <p className="text-sm leading-relaxed text-foreground bg-muted/50 p-3 rounded-lg border">
                   {getLocalizedReasoning(patient) || (language === "en"
                     ? "No AI analysis available for this patient."
@@ -447,20 +478,52 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
                 </CardTitle>
               </CardHeader>
               <CardContent>
+                <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                  {language === "en"
+                    ? "Start these precautions immediately after sample collection. Do not wait for AI."
+                    : "नमूना संग्रह के तुरंत बाद ये सावधानियां शुरू करें। एआई का इंतजार न करें।"}
+                </div>
                 <ul className="space-y-3">
-                  {[
-                    { icon: CheckCircle2, text: t.isolateFromChildren },
-                    { icon: CheckCircle2, text: t.wearMask },
-                    { icon: CheckCircle2, text: t.ventilateRoom },
-                  ].map((instruction, index) => (
-                    <li key={index} className="flex items-start gap-3">
-                      <instruction.icon className="h-5 w-5 text-emerald-600 mt-0.5 shrink-0" />
-                      <span className="text-sm">{instruction.text}</span>
-                    </li>
-                  ))}
+                  {aiActionItems.length > 0
+                    ? aiActionItems.map((text, index) => (
+                        <li key={`${text}-${index}`} className="flex items-start gap-3">
+                          <CheckCircle2 className="h-5 w-5 text-emerald-600 mt-0.5 shrink-0" />
+                          <span className="text-sm">{text}</span>
+                        </li>
+                      ))
+                    : [
+                        { text: t.isolateFromChildren },
+                        { text: t.wearMask },
+                        { text: t.ventilateRoom },
+                      ].map((instruction, index) => (
+                        <li key={index} className="flex items-start gap-3">
+                          <CheckCircle2 className="h-5 w-5 text-emerald-600 mt-0.5 shrink-0" />
+                          <span className="text-sm">{instruction.text}</span>
+                        </li>
+                      ))}
                 </ul>
               </CardContent>
             </Card>
+
+            {patient.doctorInstructions && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">
+                    {language === "en" ? "Doctor Instructions" : "डॉक्टर के निर्देश"}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="mb-2 rounded-md border bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    {language === "en"
+                      ? "Top priority: follow doctor instructions first."
+                      : "सर्वोच्च प्राथमिकता: पहले डॉक्टर के निर्देशों का पालन करें।"}
+                  </div>
+                  <p className="text-sm leading-relaxed text-foreground bg-muted/50 p-3 rounded-lg border">
+                    {patient.doctorInstructions}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
 
             <Card>
               <CardHeader className="pb-2">

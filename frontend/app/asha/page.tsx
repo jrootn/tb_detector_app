@@ -5,7 +5,6 @@ import { onAuthStateChanged, signOut } from "firebase/auth"
 import { useRouter } from "next/navigation"
 import { AppShell } from "@/components/app-shell"
 import { auth } from "@/lib/firebase"
-import { useAutoSync } from "@/hooks/useAutoSync"
 import { doc, getDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 
@@ -13,8 +12,6 @@ export default function AshaPage() {
   const router = useRouter()
   const [ashaId, setAshaId] = useState<string | null>(null)
   const [ashaName, setAshaName] = useState<string | null>(null)
-
-  useAutoSync()
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -30,6 +27,7 @@ export default function AshaPage() {
           return
         }
         localStorage.setItem("user_role", "ASHA")
+        localStorage.setItem("user_uid", user.uid)
         if (data?.name) {
           localStorage.setItem("user_name", data.name)
           setAshaName(data.name)
@@ -65,6 +63,9 @@ export default function AshaPage() {
       initialAshaName={ashaName || ""}
       onLogout={async () => {
         await signOut(auth)
+        localStorage.removeItem("user_role")
+        localStorage.removeItem("user_name")
+        localStorage.removeItem("user_uid")
         router.replace("/login")
       }}
     />

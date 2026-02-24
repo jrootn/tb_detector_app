@@ -24,6 +24,9 @@ export default function LoginPage() {
 
     try {
       const result = await signInWithEmailAndPassword(auth, email, password)
+      localStorage.removeItem("user_role")
+      localStorage.removeItem("user_name")
+      localStorage.removeItem("user_uid")
       const snap = await getDoc(doc(db, "users", result.user.uid))
       const role = snap.data()?.role
       const name = snap.data()?.name
@@ -33,6 +36,7 @@ export default function LoginPage() {
       if (name) {
         localStorage.setItem("user_name", name)
       }
+      localStorage.setItem("user_uid", result.user.uid)
 
       if (role === "ASHA") router.replace("/asha")
       else if (role === "DOCTOR") router.replace("/doctor")

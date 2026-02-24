@@ -1,4 +1,4 @@
-import { getAllPatients, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
+import { cleanupOrphanUploads, getPatientsForAsha, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
 import type { Patient } from "@/lib/mockData"
 import { auth, db, storage } from "@/lib/firebase"
 import { normalizeAiRiskScore } from "@/lib/ai"
@@ -187,6 +187,15 @@ function toDateOnly(value?: string): string {
   return value.split("T")[0]
 }
 
+function toIsoTimestamp(value?: string): string {
+  if (!value) return new Date().toISOString()
+  const date = new Date(value)
+  if (!Number.isNaN(date.getTime())) {
+    return date.toISOString()
+  }
+  return value
+}
+
 function parseLocalizedSummary(ai: Record<string, unknown>): { en?: string; hi?: string } {
   const result: { en?: string; hi?: string } = {}
   const direct = ai.medgemini_summary
@@ -205,6 +214,30 @@ function parseLocalizedSummary(ai: Record<string, unknown>): { en?: string; hi?:
     if (typeof map.en === "string") result.en = map.en
     if (typeof map.hi === "string") result.hi = map.hi
   }
+  return result
+}
+
+function parseLocalizedActions(ai: Record<string, unknown>): { en?: string[]; hi?: string[] } {
+  const result: { en?: string[]; hi?: string[] } = {}
+  const direct = ai.action_items_i18n
+
+  const normalizeList = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) return undefined
+    const items = value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+    return items.length > 0 ? items : undefined
+  }
+
+  if (direct && typeof direct === "object") {
+    const map = direct as Record<string, unknown>
+    result.en = normalizeList(map.en) || result.en
+    result.hi = normalizeList(map.hi) || result.hi
+  }
+
+  result.en = normalizeList(ai.action_items_en) || result.en
+  result.hi = normalizeList(ai.action_items_hi) || result.hi
   return result
 }
 
@@ -250,12 +283,13 @@ function buildSymptomList(patient: Patient) {
 }
 
 function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string, assignment?: AssignmentContext) {
+  const collectedAt = patient.collectedAt || patient.createdAt
   return {
     patient_local_id: patient.id,
     device_id: "web-app",
     asha_worker_id: ashaWorkerId,
     asha_id: ashaWorkerId,
-    created_at_offline: patient.createdAt,
+    created_at_offline: collectedAt,
     demographics: {
       name: patient.name,
       age: patient.age,
@@ -301,18 +335,19 @@ function mapPatientToSyncRecord(patient: Patient, ashaWorkerId: string, assignme
     assignment_mode: assignment?.facilityId ? "FACILITY_TAGGING" : null,
     assigned_doctor_id: assignment?.assignedDoctorId || null,
     assigned_lab_tech_id: assignment?.assignedLabTechId || null,
-    asha_name: assignment?.ashaName || null,
-    asha_phone_number: assignment?.ashaPhone || null,
+    asha_name: assignment?.ashaName || patient.ashaName || null,
+    asha_phone_number: assignment?.ashaPhone || patient.ashaPhone || null,
   }
 }
 
 function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, assignment?: AssignmentContext) {
+  const collectedAt = patient.collectedAt || patient.createdAt
   return {
     patient_local_id: patient.id,
     device_id: "web-app",
     asha_worker_id: ashaWorkerId,
     asha_id: ashaWorkerId,
-    created_at_offline: patient.createdAt,
+    created_at_offline: collectedAt,
     synced_at: new Date().toISOString(),
     demographics: {
       name: patient.name,
@@ -362,8 +397,8 @@ function buildDirectFirestorePayload(patient: Patient, ashaWorkerId: string, ass
     assignment_mode: assignment?.facilityId ? "FACILITY_TAGGING" : null,
     assigned_doctor_id: assignment?.assignedDoctorId || null,
     assigned_lab_tech_id: assignment?.assignedLabTechId || null,
-    asha_name: assignment?.ashaName || null,
-    asha_phone_number: assignment?.ashaPhone || null,
+    asha_name: assignment?.ashaName || patient.ashaName || null,
+    asha_phone_number: assignment?.ashaPhone || patient.ashaPhone || null,
   }
 }
 
@@ -380,16 +415,40 @@ function mapFirestorePatientToLocal(
   const status = (data.status || {}) as Record<string, unknown>
 
   const localizedSummary = parseLocalizedSummary(ai)
-  const riskScoreRaw =
-    typeof ai.risk_score === "number"
-      ? ai.risk_score
-      : typeof existing?.riskScore === "number"
-      ? existing.riskScore
-      : 0
-  const riskScore = normalizeAiRiskScore(riskScoreRaw, existing?.riskScore || 0)
+  const localizedActions = parseLocalizedActions(ai)
+  const hasAiRiskScore = typeof ai.risk_score === "number" || Number.isFinite(Number(ai.risk_score))
+  const riskScore = hasAiRiskScore ? normalizeAiRiskScore(ai.risk_score, 0) : 0
   const riskLevelRaw = typeof ai.risk_level === "string" ? ai.risk_level.toUpperCase() : ""
+  const inferenceStatusRaw = typeof ai.inference_status === "string" ? ai.inference_status.toUpperCase() : ""
+  const summaryEn = localizedSummary.en || existing?.medGemmaReasoning
+  const summaryHi = localizedSummary.hi || existing?.medGemmaReasoningI18n?.hi
+  const hasAnyAiOutput = hasAiRiskScore || typeof ai.hear_score === "number" || Boolean(summaryEn || summaryHi)
+  const aiStatus: Patient["aiStatus"] =
+    inferenceStatusRaw === "FAILED"
+      ? "failed"
+      : inferenceStatusRaw === "SUCCESS" || inferenceStatusRaw === "COMPLETED" || hasAnyAiOutput
+      ? "success"
+      : "pending"
   const riskLevel: Patient["riskLevel"] =
-    riskLevelRaw === "HIGH" ? "high" : riskLevelRaw === "MEDIUM" ? "medium" : riskLevelRaw === "LOW" ? "low" : riskScore >= 7 ? "high" : riskScore >= 4 ? "medium" : "low"
+    riskLevelRaw === "HIGH"
+      ? "high"
+      : riskLevelRaw === "MEDIUM"
+      ? "medium"
+      : riskLevelRaw === "LOW"
+      ? "low"
+      : aiStatus === "success"
+      ? riskScore >= 7
+        ? "high"
+        : riskScore >= 4
+        ? "medium"
+        : "low"
+      : "low"
+  const collectedAtSource =
+    typeof data.created_at_offline === "string"
+      ? data.created_at_offline
+      : typeof existing?.collectedAt === "string"
+      ? existing.collectedAt
+      : existing?.createdAt
 
   const rawRiskAnswers = (clinical.risk_factor_answers || {}) as Record<string, unknown>
   const riskFactorAnswers: NonNullable<Patient["riskFactorAnswers"]> = {}
@@ -409,11 +468,16 @@ function mapFirestorePatientToLocal(
     .filter((sign): sign is string => typeof sign === "string")
     .map((sign) => normalizePhysicalSign(sign))
 
-  const summaryEn = localizedSummary.en || existing?.medGemmaReasoning
-  const summaryHi = localizedSummary.hi || existing?.medGemmaReasoningI18n?.hi
-
   return {
     id: patientId,
+    ashaId:
+      typeof data.asha_id === "string"
+        ? data.asha_id
+        : typeof data.asha_worker_id === "string"
+        ? data.asha_worker_id
+        : existing?.ashaId,
+    ashaName: typeof data.asha_name === "string" ? data.asha_name : existing?.ashaName,
+    ashaPhone: typeof data.asha_phone_number === "string" ? data.asha_phone_number : existing?.ashaPhone,
     name: typeof demographics.name === "string" ? demographics.name : existing?.name || "Unknown",
     nameHi: existing?.nameHi || (typeof demographics.name === "string" ? demographics.name : existing?.name || "Unknown"),
     age: typeof demographics.age === "number" ? demographics.age : existing?.age || 0,
@@ -429,6 +493,7 @@ function mapFirestorePatientToLocal(
     villageHi: existing?.villageHi || (typeof demographics.village === "string" ? demographics.village : existing?.village || ""),
     riskScore: Number(riskScore),
     riskLevel,
+    aiStatus,
     status: mapStatusFromApi(typeof status.triage_status === "string" ? status.triage_status : undefined),
     distanceToPHC: existing?.distanceToPHC || 0,
     needsSync: false,
@@ -459,8 +524,14 @@ function mapFirestorePatientToLocal(
     hearAudioScore: typeof ai.hear_score === "number" ? ai.hear_score : existing?.hearAudioScore,
     medGemmaReasoning: summaryEn,
     medGemmaReasoningI18n: summaryEn || summaryHi ? { en: summaryEn, hi: summaryHi } : existing?.medGemmaReasoningI18n,
-    createdAt: toDateOnly(typeof data.created_at_offline === "string" ? data.created_at_offline : existing?.createdAt),
-    collectionDate: toDateOnly(typeof data.created_at_offline === "string" ? data.created_at_offline : existing?.collectionDate),
+    aiActionItemsI18n:
+      localizedActions.en || localizedActions.hi
+        ? { en: localizedActions.en, hi: localizedActions.hi }
+        : existing?.aiActionItemsI18n,
+    doctorInstructions: typeof data.doctor_instructions === "string" ? data.doctor_instructions : existing?.doctorInstructions,
+    createdAt: toIsoTimestamp(collectedAtSource),
+    collectedAt: toIsoTimestamp(collectedAtSource),
+    collectionDate: toDateOnly(collectedAtSource),
     scheduledTestDate: typeof status.test_scheduled_date === "string" ? status.test_scheduled_date : existing?.scheduledTestDate,
     sampleId: typeof data.sample_id === "string" ? data.sample_id : existing?.sampleId,
     latitude: typeof gps.lat === "number" ? gps.lat : existing?.latitude,
@@ -474,16 +545,25 @@ async function refreshLocalPatientsFromFirestore(
   localPatients: Patient[]
 ): Promise<Patient[] | null> {
   try {
-    const existingById = new Map(localPatients.map((p) => [p.id, p]))
-    const snap = await getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId)))
-    if (snap.empty) return null
+    const localForAsha = localPatients.filter((p) => !p.ashaId || p.ashaId === ashaWorkerId)
+    const existingById = new Map(localForAsha.map((p) => [p.id, p]))
+    const [snapByAshaId, snapByWorkerId] = await Promise.all([
+      getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId))),
+      getDocs(query(collection(db, "patients"), where("asha_worker_id", "==", ashaWorkerId))),
+    ])
 
-    const remote = snap.docs.map((docSnap) =>
+    const mergedDocs = [...snapByAshaId.docs, ...snapByWorkerId.docs]
+    if (mergedDocs.length === 0) return null
+
+    const uniqueDocs = Array.from(new Map(mergedDocs.map((docSnap) => [docSnap.id, docSnap])).values())
+
+    const remote = uniqueDocs.map((docSnap) =>
       mapFirestorePatientToLocal(docSnap.id, docSnap.data() as Record<string, unknown>, existingById.get(docSnap.id))
     )
     const remoteIds = new Set(remote.map((p) => p.id))
-    const unsyncedLocalOnly = localPatients.filter((p) => p.needsSync && !remoteIds.has(p.id))
-    const merged = [...remote, ...unsyncedLocalOnly]
+    // Preserve local-only records if backend indexing lags; prevents UI disappearance after refresh.
+    const localMissingRemote = localForAsha.filter((p) => !remoteIds.has(p.id))
+    const merged = [...remote, ...localMissingRemote]
     merged.sort((a, b) => {
       const aTime = new Date(a.collectionDate || a.createdAt).getTime()
       const bTime = new Date(b.collectionDate || b.createdAt).getTime()
@@ -554,28 +634,44 @@ async function syncPatientsDirectToFirestore(
 export async function syncData(options: { uploadsOnly?: boolean } = {}) {
   if (!navigator.onLine) return
 
-    const currentUser = auth.currentUser
-    if (!currentUser) return
+  const currentUser = auth.currentUser
+  if (!currentUser) return
 
-    try {
-      const idToken = await currentUser.getIdToken()
-      const assignment = await resolveAssignmentContext(currentUser.uid)
-      const patients = await getAllPatients()
-      const pending = patients.filter((p) => p.needsSync)
-      const records = pending.map((p) => mapPatientToSyncRecord(p, currentUser.uid, assignment))
-      const syncedIds = new Set<string>()
+  try {
+    if (options.uploadsOnly) {
+      await syncUploads(currentUser.uid)
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("sync:complete"))
+      }
+      return
+    }
 
-    if (!options.uploadsOnly && records.length > 0) {
+    const idToken = await currentUser.getIdToken()
+    const assignment = await resolveAssignmentContext(currentUser.uid)
+    const patients = await getPatientsForAsha(currentUser.uid)
+    const pending = patients.filter((p) => p.needsSync)
+    const records = pending.map((p) => mapPatientToSyncRecord(p, currentUser.uid, assignment))
+    const syncedIds = new Set<string>()
+
+    if (records.length > 0) {
       let syncedViaBackend = false
       try {
-        const res = await fetch(`${API_BASE}/v1/sync`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${idToken}`,
-          },
-          body: JSON.stringify({ records }),
-        })
+        const aborter = new AbortController()
+        const timeout = window.setTimeout(() => aborter.abort(), 6000)
+        let res: Response
+        try {
+          res = await fetch(`${API_BASE}/v1/sync`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${idToken}`,
+            },
+            signal: aborter.signal,
+            body: JSON.stringify({ records }),
+          })
+        } finally {
+          window.clearTimeout(timeout)
+        }
 
         if (!res.ok) {
           throw new Error(`Sync failed: ${res.status}`)
@@ -599,9 +695,20 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
       }
     }
 
-    await syncUploads(currentUser.uid)
+    const uploadResult = await syncUploads(currentUser.uid)
+    if (uploadResult.failed > 0) {
+      const pendingUploads = (await getPendingUploads(currentUser.uid)).filter((upload) => upload.patientId !== "pending")
+      if (pendingUploads.length > 0) {
+        const pendingPatientIds = new Set(pendingUploads.map((upload) => upload.patientId))
+        const localPatients = await getPatientsForAsha(currentUser.uid)
+        const patched = localPatients.map((patient) =>
+          pendingPatientIds.has(patient.id) ? { ...patient, needsSync: true } : patient
+        )
+        await savePatients(patched)
+      }
+    }
 
-    const localAfterSync = await getAllPatients()
+    const localAfterSync = await getPatientsForAsha(currentUser.uid)
     const refreshed = await refreshLocalPatientsFromFirestore(currentUser.uid, localAfterSync)
     if (refreshed && refreshed.length > 0) {
       await savePatients(refreshed)
@@ -609,6 +716,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
 
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("sync:complete"))
+      localStorage.setItem("tb_last_sync_at", String(Date.now()))
     }
   } catch (error) {
     console.warn("Sync failed", error)
@@ -617,6 +725,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
 
 export async function syncUploads(userId: string, options: UploadSyncOptions = {}): Promise<UploadSyncResult> {
   if (!navigator.onLine) return { uploaded: 0, failed: 0, errors: [] }
+  await cleanupOrphanUploads(userId)
   const currentRole = (typeof window !== "undefined" ? localStorage.getItem("user_role") : null) as AppRole | null
   const uploads = (await getPendingUploads(userId)).filter((upload) => {
     if (upload.patientId === "pending") return false
