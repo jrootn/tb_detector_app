@@ -135,13 +135,14 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
   const aiReady =
     patient.aiStatus === "success" ||
     Boolean(patient.medGemmaReasoning || patient.medGemmaReasoningI18n?.en || patient.medGemmaReasoningI18n?.hi || patient.hearAudioScore != null)
+  const roundedRiskScore = Number.isFinite(patient.riskScore) ? Number(patient.riskScore.toFixed(1)) : 0
   const collectorDisplayName = (() => {
     if (patient.ashaName) return patient.ashaName
     if (typeof window !== "undefined") {
       const localCollectorName = localStorage.getItem("user_name")
       if (localCollectorName) return localCollectorName
     }
-    return patient.ashaId || "-"
+    return language === "en" ? "ASHA Worker" : "आशा कार्यकर्ता"
   })()
   const collectedAtLabel = (() => {
     const raw = patient.collectedAt || patient.createdAt
@@ -234,7 +235,7 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
           </div>
           <div className="text-right">
             <Badge className={`${aiReady ? getRiskBadgeStyle(patient.riskLevel) : "bg-slate-500 text-white"} text-lg px-3 py-1`}>
-              {aiReady ? `${patient.riskScore}/10` : language === "en" ? "AI Pending" : "एआई प्रतीक्षा"}
+              {aiReady ? `${roundedRiskScore.toFixed(1)}/10` : language === "en" ? "AI Pending" : "एआई प्रतीक्षा"}
             </Badge>
             <p className="text-sm font-medium mt-1">
               {aiReady ? `${getRiskLabel(patient.riskLevel)} ${t.riskScore}` : language === "en" ? "Awaiting AI risk score" : "एआई जोखिम स्कोर की प्रतीक्षा"}
@@ -480,8 +481,8 @@ export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProf
               <CardContent>
                 <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                   {language === "en"
-                    ? "Start these precautions immediately after sample collection. Do not wait for AI."
-                    : "नमूना संग्रह के तुरंत बाद ये सावधानियां शुरू करें। एआई का इंतजार न करें।"}
+                    ? "Follow these instructions during screening and while awaiting test completion."
+                    : "जांच पूरी होने तक स्क्रीनिंग अवधि में इन निर्देशों का पालन करें।"}
                 </div>
                 <ul className="space-y-3">
                   {aiActionItems.length > 0

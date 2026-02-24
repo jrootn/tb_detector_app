@@ -32,6 +32,15 @@ export default function AshaPage() {
           localStorage.setItem("user_name", data.name)
           setAshaName(data.name)
         }
+        if (data?.facility_id) {
+          localStorage.setItem(`tb_cached_facility_id_${user.uid}`, data.facility_id)
+        }
+        if (data?.facility_name) {
+          localStorage.setItem(`tb_cached_facility_name_${user.uid}`, data.facility_name)
+        }
+        if (data?.tu_id) {
+          localStorage.setItem(`tb_cached_tu_id_${user.uid}`, data.tu_id)
+        }
         if (data?.preferred_language === "en" || data?.preferred_language === "hi") {
           localStorage.setItem("user_preferred_language", data.preferred_language)
           if (!localStorage.getItem("app_language")) {

@@ -44,7 +44,8 @@ export async function getAllPatients() {
 export async function getPatientsForAsha(ashaId?: string) {
   const all = await db.patients.toArray()
   if (!ashaId) return all
-  return all.filter((patient) => patient.ashaId === ashaId || (!patient.ashaId && patient.needsSync))
+  // Strict user scoping avoids cross-account leakage from legacy local records.
+  return all.filter((patient) => patient.ashaId === ashaId)
 }
 
 export async function seedPatientsIfEmpty(patients: PatientRecord[]) {
@@ -57,6 +58,28 @@ export async function seedPatientsIfEmpty(patients: PatientRecord[]) {
 export async function savePatients(patients: PatientRecord[]) {
   if (patients.length === 0) return
   await db.patients.bulkPut(patients)
+}
+
+export async function replacePatientsForAsha(ashaId: string, patients: PatientRecord[]) {
+  const normalized = patients.map((patient) =>
+    patient.ashaId ? patient : { ...patient, ashaId }
+  )
+  const incomingIds = new Set(normalized.map((patient) => patient.id))
+
+  await db.transaction("rw", db.patients, async () => {
+    const existing = await db.patients.where("ashaId").equals(ashaId).toArray()
+    const staleIds = existing
+      .filter((patient) => !incomingIds.has(patient.id))
+      .map((patient) => patient.id)
+
+    if (staleIds.length > 0) {
+      await Promise.all(staleIds.map((id) => db.patients.delete(id)))
+    }
+
+    if (normalized.length > 0) {
+      await db.patients.bulkPut(normalized)
+    }
+  })
 }
 
 export async function upsertPatient(patient: PatientRecord) {
@@ -99,8 +122,19 @@ export async function getPendingUploads(ownerUid?: string) {
 export async function cleanupOrphanUploads(ownerUid?: string) {
   const uploads = await getPendingUploads(ownerUid)
   const validPatientIds = new Set((await db.patients.toArray()).map((patient) => patient.id))
+  const now = Date.now()
+  const orphanGraceMs = 10 * 60 * 1000
   const orphanIds = uploads
-    .filter((upload) => upload.patientId !== "pending" && !validPatientIds.has(upload.patientId))
+    .filter((upload) => {
+      if (upload.patientId === "pending") return false
+      if (validPatientIds.has(upload.patientId)) return false
+      const createdAtMs = new Date(upload.createdAt).getTime()
+      if (Number.isFinite(createdAtMs) && now - createdAtMs < orphanGraceMs) {
+        // Avoid dropping fresh uploads while the corresponding patient row is still being persisted.
+        return false
+      }
+      return true
+    })
     .map((upload) => upload.id)
 
   if (orphanIds.length > 0) {
@@ -116,6 +150,25 @@ export async function getPendingUploadCount(ownerUid?: string) {
   await cleanupOrphanUploads(ownerUid)
   const uploads = await getPendingUploads(ownerUid)
   return uploads.filter((upload) => upload.patientId !== "pending").length
+}
+
+export async function cleanupLegacyMockPatients() {
+  const all = await db.patients.toArray()
+  const legacyIds = all
+    .map((patient) => patient.id)
+    .filter((id) => /^P\d{3}$/.test(id))
+
+  if (legacyIds.length === 0) return 0
+
+  await db.transaction("rw", db.patients, db.uploads, async () => {
+    const legacySet = new Set(legacyIds)
+    await Promise.all(legacyIds.map((id) => db.patients.delete(id)))
+    const uploads = await db.uploads.toArray()
+    const uploadIds = uploads.filter((upload) => legacySet.has(upload.patientId)).map((upload) => upload.id)
+    await Promise.all(uploadIds.map((id) => db.uploads.delete(id)))
+  })
+
+  return legacyIds.length
 }
 
 export { db }

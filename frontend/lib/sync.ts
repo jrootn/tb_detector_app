@@ -1,8 +1,28 @@
-import { cleanupOrphanUploads, getPatientsForAsha, savePatients, getPendingUploads, removeUpload } from "@/lib/db"
+import {
+  db as localDb,
+  cleanupOrphanUploads,
+  getPatientsForAsha,
+  savePatients,
+  getPendingUploads,
+  removeUpload,
+  replacePatientsForAsha,
+} from "@/lib/db"
 import type { Patient } from "@/lib/mockData"
 import { auth, db, storage } from "@/lib/firebase"
 import { normalizeAiRiskScore } from "@/lib/ai"
-import { doc, updateDoc, arrayUnion, setDoc, getDoc, collection, getDocs, query, where } from "firebase/firestore"
+import {
+  doc,
+  updateDoc,
+  arrayUnion,
+  setDoc,
+  getDoc,
+  collection,
+  getDocs,
+  query,
+  where,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+} from "firebase/firestore"
 import { ref, uploadBytes } from "firebase/storage"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
@@ -26,6 +46,53 @@ interface AssignmentContext {
   ashaPhone?: string
   assignedDoctorId?: string
   assignedLabTechId?: string
+}
+
+function hasRemoteAudio(data: Record<string, unknown>): boolean {
+  const audio = data.audio
+  if (!Array.isArray(audio)) return false
+  return audio.some((entry) => {
+    if (!entry || typeof entry !== "object") return false
+    const map = entry as Record<string, unknown>
+    return (
+      typeof map.storage_path === "string" ||
+      typeof map.storage_uri === "string" ||
+      typeof map.url === "string"
+    )
+  })
+}
+
+async function cleanupSyncedAshaAudioUploads(userId: string): Promise<void> {
+  const uploads = (await getPendingUploads(userId)).filter(
+    (upload) => upload.role === "ASHA" && upload.kind === "audio" && upload.patientId !== "pending"
+  )
+  if (uploads.length === 0) return
+
+  const uniquePatientIds = Array.from(new Set(uploads.map((upload) => upload.patientId)))
+  const syncedPatientIds = new Set<string>()
+
+  await Promise.all(
+    uniquePatientIds.map(async (patientId) => {
+      try {
+        const snap = await getDoc(doc(db, "patients", patientId))
+        if (!snap.exists()) return
+        const data = (snap.data() || {}) as Record<string, unknown>
+        if (hasRemoteAudio(data)) {
+          syncedPatientIds.add(patientId)
+        }
+      } catch {
+        // Ignore lookup failures; regular sync retries will continue to handle these uploads.
+      }
+    })
+  )
+
+  if (syncedPatientIds.size === 0) return
+
+  await Promise.all(
+    uploads
+      .filter((upload) => syncedPatientIds.has(upload.patientId))
+      .map((upload) => removeUpload(upload.id))
+  )
 }
 
 function getErrorCode(error: unknown): string | undefined {
@@ -546,23 +613,53 @@ async function refreshLocalPatientsFromFirestore(
 ): Promise<Patient[] | null> {
   try {
     const localForAsha = localPatients.filter((p) => !p.ashaId || p.ashaId === ashaWorkerId)
+    const pendingUploadPatientIds = new Set(
+      (await getPendingUploads(ashaWorkerId))
+        .filter((upload) => upload.patientId !== "pending")
+        .map((upload) => upload.patientId)
+    )
     const existingById = new Map(localForAsha.map((p) => [p.id, p]))
-    const [snapByAshaId, snapByWorkerId] = await Promise.all([
-      getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId))),
-      getDocs(query(collection(db, "patients"), where("asha_worker_id", "==", ashaWorkerId))),
-    ])
+    const docById = new Map<string, QueryDocumentSnapshot<DocumentData>>()
+    let querySnapshot: Awaited<ReturnType<typeof getDocs>>
 
-    const mergedDocs = [...snapByAshaId.docs, ...snapByWorkerId.docs]
-    if (mergedDocs.length === 0) return null
+    try {
+      querySnapshot = await getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId)))
+      querySnapshot.docs.forEach((docSnap) => {
+        docById.set(docSnap.id, docSnap)
+      })
+    } catch (error) {
+      console.warn("Could not query patients by asha_id", error)
+    }
 
-    const uniqueDocs = Array.from(new Map(mergedDocs.map((docSnap) => [docSnap.id, docSnap])).values())
+    try {
+      querySnapshot = await getDocs(query(collection(db, "patients"), where("asha_worker_id", "==", ashaWorkerId)))
+      querySnapshot.docs.forEach((docSnap) => {
+        docById.set(docSnap.id, docSnap)
+      })
+    } catch (error) {
+      if (getErrorCode(error) !== "permission-denied") {
+        console.warn("Could not query patients by asha_worker_id", error)
+      }
+    }
+
+    const uniqueDocs = Array.from(docById.values())
+    if (uniqueDocs.length === 0) return null
 
     const remote = uniqueDocs.map((docSnap) =>
       mapFirestorePatientToLocal(docSnap.id, docSnap.data() as Record<string, unknown>, existingById.get(docSnap.id))
     )
     const remoteIds = new Set(remote.map((p) => p.id))
-    // Preserve local-only records if backend indexing lags; prevents UI disappearance after refresh.
-    const localMissingRemote = localForAsha.filter((p) => !remoteIds.has(p.id))
+    // Preserve only recent or truly pending local-only records.
+    // This avoids keeping stale legacy/demo rows forever in ASHA dashboards.
+    const now = Date.now()
+    const localMissingRemote = localForAsha.filter((p) => {
+      if (remoteIds.has(p.id)) return false
+      const ts = new Date(p.collectionDate || p.createdAt).getTime()
+      if (Number.isNaN(ts)) return false
+      const recent = now - ts < 3 * 24 * 60 * 60 * 1000
+      if (p.needsSync && pendingUploadPatientIds.has(p.id)) return true
+      return recent
+    })
     const merged = [...remote, ...localMissingRemote]
     merged.sort((a, b) => {
       const aTime = new Date(a.collectionDate || a.createdAt).getTime()
@@ -576,6 +673,16 @@ async function refreshLocalPatientsFromFirestore(
   }
 }
 
+export async function hydrateAshaPatientsFromCloud(ashaWorkerId: string): Promise<Patient[]> {
+  const local = await getPatientsForAsha(ashaWorkerId)
+  const refreshed = await refreshLocalPatientsFromFirestore(ashaWorkerId, local)
+  if (refreshed && refreshed.length > 0) {
+    await replacePatientsForAsha(ashaWorkerId, refreshed)
+    return refreshed
+  }
+  return local
+}
+
 async function resolveAssignmentContext(ashaWorkerId: string): Promise<AssignmentContext> {
   const result: AssignmentContext = {}
   try {
@@ -587,25 +694,88 @@ async function resolveAssignmentContext(ashaWorkerId: string): Promise<Assignmen
       tu_id?: string
       name?: string
       phone?: string
+      assigned_doctor_id?: string
+      assigned_lab_tech_id?: string
     }
-    if (!ashaData.facility_id) return result
 
     result.facilityId = ashaData.facility_id
     result.facilityName = ashaData.facility_name
     result.tuId = ashaData.tu_id
     result.ashaName = ashaData.name
     result.ashaPhone = ashaData.phone
+    result.assignedDoctorId = ashaData.assigned_doctor_id
+    result.assignedLabTechId = ashaData.assigned_lab_tech_id
 
-    const usersSnap = await getDocs(collection(db, "users"))
-    for (const userDoc of usersSnap.docs) {
-      const user = userDoc.data() as { role?: string; facility_id?: string }
-      if (!result.assignedDoctorId && user.role === "DOCTOR" && user.facility_id === ashaData.facility_id) {
-        result.assignedDoctorId = userDoc.id
+    if (typeof window !== "undefined") {
+      const doctorKey = `tb_cached_assigned_doctor_id_${ashaWorkerId}`
+      const labKey = `tb_cached_assigned_lab_tech_id_${ashaWorkerId}`
+      const facilityKey = `tb_cached_facility_id_${ashaWorkerId}`
+      const facilityNameKey = `tb_cached_facility_name_${ashaWorkerId}`
+      const tuKey = `tb_cached_tu_id_${ashaWorkerId}`
+
+      if (!result.ashaName) {
+        const cachedName = localStorage.getItem("user_name")
+        if (cachedName) result.ashaName = cachedName
       }
-      if (!result.assignedLabTechId && user.role === "LAB_TECH" && user.facility_id === ashaData.facility_id) {
-        result.assignedLabTechId = userDoc.id
+
+      if (!result.assignedDoctorId) {
+        const cachedDoctor = localStorage.getItem(doctorKey)
+        if (cachedDoctor) result.assignedDoctorId = cachedDoctor
       }
-      if (result.assignedDoctorId && result.assignedLabTechId) break
+      if (!result.assignedLabTechId) {
+        const cachedLab = localStorage.getItem(labKey)
+        if (cachedLab) result.assignedLabTechId = cachedLab
+      }
+      if (!result.facilityId) {
+        const cachedFacility = localStorage.getItem(facilityKey)
+        if (cachedFacility) result.facilityId = cachedFacility
+      }
+      if (!result.facilityName) {
+        const cachedFacilityName = localStorage.getItem(facilityNameKey)
+        if (cachedFacilityName) result.facilityName = cachedFacilityName
+      }
+      if (!result.tuId) {
+        const cachedTuId = localStorage.getItem(tuKey)
+        if (cachedTuId) result.tuId = cachedTuId
+      }
+    }
+
+    // ASHA cannot read all users in current rules. Reuse assignments from
+    // existing ASHA-owned patient docs to keep new records routable.
+    if (!result.assignedDoctorId || !result.assignedLabTechId || !result.facilityId || !result.facilityName || !result.tuId) {
+      const ownPatients = await getDocs(query(collection(db, "patients"), where("asha_id", "==", ashaWorkerId)))
+      for (const patientDoc of ownPatients.docs) {
+        const data = patientDoc.data() as Record<string, unknown>
+        if (!result.assignedDoctorId && typeof data.assigned_doctor_id === "string") {
+          result.assignedDoctorId = data.assigned_doctor_id
+        }
+        if (!result.assignedLabTechId && typeof data.assigned_lab_tech_id === "string") {
+          result.assignedLabTechId = data.assigned_lab_tech_id
+        }
+        if (!result.facilityId && typeof data.facility_id === "string") {
+          result.facilityId = data.facility_id
+        }
+        if (!result.facilityName && typeof data.facility_name === "string") {
+          result.facilityName = data.facility_name
+        }
+        if (!result.tuId && typeof data.tu_id === "string") {
+          result.tuId = data.tu_id
+        }
+        if (result.assignedDoctorId && result.assignedLabTechId && result.facilityId && result.facilityName && result.tuId) break
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      const doctorKey = `tb_cached_assigned_doctor_id_${ashaWorkerId}`
+      const labKey = `tb_cached_assigned_lab_tech_id_${ashaWorkerId}`
+      const facilityKey = `tb_cached_facility_id_${ashaWorkerId}`
+      const facilityNameKey = `tb_cached_facility_name_${ashaWorkerId}`
+      const tuKey = `tb_cached_tu_id_${ashaWorkerId}`
+      if (result.assignedDoctorId) localStorage.setItem(doctorKey, result.assignedDoctorId)
+      if (result.assignedLabTechId) localStorage.setItem(labKey, result.assignedLabTechId)
+      if (result.facilityId) localStorage.setItem(facilityKey, result.facilityId)
+      if (result.facilityName) localStorage.setItem(facilityNameKey, result.facilityName)
+      if (result.tuId) localStorage.setItem(tuKey, result.tuId)
     }
   } catch (error) {
     console.warn("Could not resolve assignment context", error)
@@ -640,6 +810,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
   try {
     if (options.uploadsOnly) {
       await syncUploads(currentUser.uid)
+      await cleanupSyncedAshaAudioUploads(currentUser.uid)
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("sync:complete"))
       }
@@ -695,23 +866,45 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
       }
     }
 
-    const uploadResult = await syncUploads(currentUser.uid)
-    if (uploadResult.failed > 0) {
-      const pendingUploads = (await getPendingUploads(currentUser.uid)).filter((upload) => upload.patientId !== "pending")
-      if (pendingUploads.length > 0) {
-        const pendingPatientIds = new Set(pendingUploads.map((upload) => upload.patientId))
-        const localPatients = await getPatientsForAsha(currentUser.uid)
-        const patched = localPatients.map((patient) =>
-          pendingPatientIds.has(patient.id) ? { ...patient, needsSync: true } : patient
-        )
-        await savePatients(patched)
-      }
-    }
+    await syncUploads(currentUser.uid)
+    await cleanupSyncedAshaAudioUploads(currentUser.uid)
 
     const localAfterSync = await getPatientsForAsha(currentUser.uid)
     const refreshed = await refreshLocalPatientsFromFirestore(currentUser.uid, localAfterSync)
-    if (refreshed && refreshed.length > 0) {
-      await savePatients(refreshed)
+    const baselineLocal = refreshed && refreshed.length > 0 ? refreshed : localAfterSync
+    if (baselineLocal.length > 0) {
+      const pendingUploadIds = new Set(
+        (await getPendingUploads(currentUser.uid))
+          .filter((upload) => upload.patientId !== "pending")
+          .map((upload) => upload.patientId)
+      )
+
+      const staleNeedsSync = baselineLocal.filter((patient) => patient.needsSync && !pendingUploadIds.has(patient.id))
+      if (staleNeedsSync.length > 0) {
+        const existsChecks = await Promise.all(
+          staleNeedsSync.map(async (patient) => {
+            try {
+              const snap = await getDoc(doc(db, "patients", patient.id))
+              return [patient.id, snap.exists()] as const
+            } catch {
+              return [patient.id, false] as const
+            }
+          })
+        )
+        const existsRemote = new Set(existsChecks.filter(([, exists]) => exists).map(([id]) => id))
+        if (existsRemote.size > 0) {
+          await replacePatientsForAsha(
+            currentUser.uid,
+            baselineLocal.map((patient) =>
+              existsRemote.has(patient.id) ? { ...patient, needsSync: false } : patient
+            )
+          )
+        } else {
+          await replacePatientsForAsha(currentUser.uid, baselineLocal)
+        }
+      } else {
+        await replacePatientsForAsha(currentUser.uid, baselineLocal)
+      }
     }
 
     if (typeof window !== "undefined") {
@@ -727,6 +920,9 @@ export async function syncUploads(userId: string, options: UploadSyncOptions = {
   if (!navigator.onLine) return { uploaded: 0, failed: 0, errors: [] }
   await cleanupOrphanUploads(userId)
   const currentRole = (typeof window !== "undefined" ? localStorage.getItem("user_role") : null) as AppRole | null
+  const localPatients = await getPatientsForAsha(userId)
+  const localById = new Map(localPatients.map((patient) => [patient.id, patient]))
+  let assignmentContext: AssignmentContext | null | undefined
   const uploads = (await getPendingUploads(userId)).filter((upload) => {
     if (upload.patientId === "pending") return false
     if (options.role && upload.role !== options.role) return false
@@ -738,6 +934,27 @@ export async function syncUploads(userId: string, options: UploadSyncOptions = {
   let uploaded = 0
   let failed = 0
   const errors: Array<{ id: string; message: string }> = []
+
+  const ensureRemotePatient = async (patientId: string): Promise<boolean> => {
+    try {
+      const patientRef = doc(db, "patients", patientId)
+      const snap = await getDoc(patientRef)
+      if (snap.exists()) return true
+
+      const localPatient = localById.get(patientId) || (await localDb.patients.get(patientId))
+      if (!localPatient) return false
+
+      if (assignmentContext === undefined) {
+        assignmentContext = await resolveAssignmentContext(userId)
+      }
+
+      const payload = buildDirectFirestorePayload(localPatient, userId, assignmentContext || undefined)
+      await setDoc(patientRef, payload, { merge: true })
+      return true
+    } catch {
+      return false
+    }
+  }
 
   for (const upload of uploads) {
     try {
@@ -756,6 +973,16 @@ export async function syncUploads(userId: string, options: UploadSyncOptions = {
 
       const contentType = inferMimeType(upload.fileName, upload.kind, upload.mimeType)
       await auth.currentUser?.getIdToken(true)
+      const hasPatientDoc = await ensureRemotePatient(upload.patientId)
+      if (!hasPatientDoc) {
+        const localFallback = await localDb.patients.get(upload.patientId)
+        if (!localFallback) {
+          // Local patient no longer exists; drop this orphan upload so pending counters can recover.
+          await removeUpload(upload.id)
+          continue
+        }
+        throw new Error("Remote patient record missing; cannot attach upload")
+      }
       try {
         const fileRef = ref(storage, path)
         await uploadBytes(fileRef, upload.blob, { contentType })
@@ -784,13 +1011,32 @@ export async function syncUploads(userId: string, options: UploadSyncOptions = {
           uploaded_at: uploadedAt,
           uploaded_by: userId,
         }
-        await updateDoc(patientRef, {
-          "lab_results.report_path": path,
-          "lab_results.uploaded_at": uploadedAt,
-          "lab_results.uploaded_by": userId,
-          "lab_results.files": arrayUnion(reportEntry),
-          "status.triage_status": "LAB_DONE",
-        })
+        try {
+          await updateDoc(patientRef, {
+            "lab_results.report_path": path,
+            "lab_results.uploaded_at": uploadedAt,
+            "lab_results.uploaded_by": userId,
+            "lab_results.files": arrayUnion(reportEntry),
+            "status.triage_status": "LAB_DONE",
+          })
+        } catch (error) {
+          if ((error instanceof Error && error.message.includes("No document to update")) || getErrorCode(error) === "not-found") {
+            const created = await ensureRemotePatient(upload.patientId)
+            if (created) {
+              await updateDoc(patientRef, {
+                "lab_results.report_path": path,
+                "lab_results.uploaded_at": uploadedAt,
+                "lab_results.uploaded_by": userId,
+                "lab_results.files": arrayUnion(reportEntry),
+                "status.triage_status": "LAB_DONE",
+              })
+            } else {
+              throw error
+            }
+          } else {
+            throw error
+          }
+        }
       } else if (upload.role === "DOCTOR" && upload.kind === "report") {
         const fileEntry: Record<string, unknown> = {
           name: upload.fileName,
@@ -798,9 +1044,24 @@ export async function syncUploads(userId: string, options: UploadSyncOptions = {
           mime_type: contentType,
           uploaded_at: uploadedAt,
         }
-        await updateDoc(patientRef, {
-          doctor_files: arrayUnion(fileEntry),
-        })
+        try {
+          await updateDoc(patientRef, {
+            doctor_files: arrayUnion(fileEntry),
+          })
+        } catch (error) {
+          if ((error instanceof Error && error.message.includes("No document to update")) || getErrorCode(error) === "not-found") {
+            const created = await ensureRemotePatient(upload.patientId)
+            if (created) {
+              await updateDoc(patientRef, {
+                doctor_files: arrayUnion(fileEntry),
+              })
+            } else {
+              throw error
+            }
+          } else {
+            throw error
+          }
+        }
       } else {
         const audioEntry: Record<string, unknown> = {
           file_name: upload.fileName,
@@ -808,9 +1069,24 @@ export async function syncUploads(userId: string, options: UploadSyncOptions = {
           storage_path: path,
           uploaded_at: uploadedAt,
         }
-        await updateDoc(patientRef, {
-          audio: arrayUnion(audioEntry),
-        })
+        try {
+          await updateDoc(patientRef, {
+            audio: arrayUnion(audioEntry),
+          })
+        } catch (error) {
+          if ((error instanceof Error && error.message.includes("No document to update")) || getErrorCode(error) === "not-found") {
+            const created = await ensureRemotePatient(upload.patientId)
+            if (created) {
+              await updateDoc(patientRef, {
+                audio: arrayUnion(audioEntry),
+              })
+            } else {
+              throw error
+            }
+          } else {
+            throw error
+          }
+        }
       }
 
       await removeUpload(upload.id)

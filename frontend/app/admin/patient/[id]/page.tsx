@@ -7,6 +7,7 @@ import { doc, getDoc } from "firebase/firestore"
 import { auth, db } from "@/lib/firebase"
 import { getAiSummaryText, normalizeAiRiskScore } from "@/lib/ai"
 import { resolveStorageUrl } from "@/lib/storage-utils"
+import { getCachedUserName, resolveUserName } from "@/lib/user-names"
 import { triageStatusLabel } from "@/lib/triage-status"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -44,6 +45,7 @@ export default function AdminPatientPage() {
   const [patient, setPatient] = useState<PatientRecord | null>(null)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [reportUrl, setReportUrl] = useState<string | null>(null)
+  const [collectedByName, setCollectedByName] = useState<string>("")
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
@@ -67,6 +69,20 @@ export default function AdminPatientPage() {
 
         const data = patientSnap.data() as PatientRecord
         setPatient({ id, ...data })
+        const ashaUid = data.asha_id || data.asha_worker_id
+        if (data.asha_name && data.asha_name.trim().length > 0) {
+          setCollectedByName(data.asha_name)
+        } else if (ashaUid) {
+          const cached = getCachedUserName(ashaUid)
+          if (cached) {
+            setCollectedByName(cached)
+          } else {
+            const resolved = await resolveUserName(ashaUid)
+            setCollectedByName(resolved || "ASHA Worker")
+          }
+        } else {
+          setCollectedByName("ASHA Worker")
+        }
 
         const audioCandidate = data.audio?.[0]?.download_url || data.audio?.[0]?.storage_uri || data.audio?.[0]?.storage_path
         const reportCandidate = data.lab_results?.report_uri || data.lab_results?.report_path
@@ -107,7 +123,7 @@ export default function AdminPatientPage() {
           <div>Phone: {patient.demographics?.phone || "-"}</div>
           <div>Age/Gender: {patient.demographics?.age || "-"} / {patient.demographics?.gender || "-"}</div>
           <div>Village/Pincode: {patient.demographics?.village || "-"} / {patient.demographics?.pincode || "-"}</div>
-          <div>Collected by: {patient.asha_name || patient.asha_id || patient.asha_worker_id || "-"}</div>
+          <div>Collected by: {collectedByName || patient.asha_name || "ASHA Worker"}</div>
           <div>Collected at: {collectedAtLabel}</div>
           <div>Facility: {patient.facility_name || patient.facility_id || "-"}</div>
           <div>Assigned Doctor UID: {patient.assigned_doctor_id || "-"}</div>

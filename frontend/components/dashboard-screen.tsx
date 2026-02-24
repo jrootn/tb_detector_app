@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { useLanguage } from "@/lib/language-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -53,11 +53,13 @@ interface DashboardScreenProps {
   isOnline: boolean
   patients: Patient[]
   pendingUploads: number
+  pendingUploadPatientIds: string[]
   onLogout: () => void
   onNewScreening: () => void
   onViewPatient: (patient: Patient) => void
   onViewPriority: () => void
   onOpenProfile: () => void
+  onSyncPendingUploads?: () => void
   gpsLocation: GPSLocation
 }
 
@@ -69,11 +71,13 @@ export function DashboardScreen({
   isOnline,
   patients,
   pendingUploads,
+  pendingUploadPatientIds,
   onLogout,
   onNewScreening,
   onViewPatient,
   onViewPriority,
   onOpenProfile,
+  onSyncPendingUploads,
   gpsLocation,
 }: DashboardScreenProps) {
   const { t, language } = useLanguage()
@@ -82,6 +86,7 @@ export function DashboardScreen({
   const [showOfflineWarning, setShowOfflineWarning] = useState(false)
   const stats = getStats(patients)
   const hasPendingSync = pendingUploads > 0
+  const pendingUploadSet = useMemo(() => new Set(pendingUploadPatientIds), [pendingUploadPatientIds])
   const hasAiResult = (patient: Patient) =>
     patient.aiStatus === "success" ||
     Boolean(patient.medGemmaReasoning || patient.medGemmaReasoningI18n?.en || patient.medGemmaReasoningI18n?.hi || patient.hearAudioScore != null)
@@ -95,7 +100,7 @@ export function DashboardScreen({
         filtered = filtered.filter((patient) => hasAiResult(patient) && patient.riskScore >= 7)
         break
       case "needsSync":
-        filtered = filtered.filter((patient) => patient.needsSync)
+        filtered = filtered.filter((patient) => pendingUploadSet.has(patient.id))
         break
       case "completed":
         filtered = filtered.filter(
@@ -119,7 +124,17 @@ export function DashboardScreen({
       if (aTime !== bTime) return aTime - bTime
       return a.id.localeCompare(b.id)
     })
-  }, [patients, filter, dateFilter])
+  }, [patients, filter, dateFilter, pendingUploadSet])
+  const hasAnyPatients = patients.length > 0
+  const isFilterConstrained = filter !== "all" || Boolean(dateFilter)
+  const showFilterEmptyState = filteredPatients.length === 0 && hasAnyPatients && isFilterConstrained
+
+  useEffect(() => {
+    // Auto-reset stale "needs sync" filter once queue is drained online.
+    if (filter === "needsSync" && isOnline && !hasPendingSync) {
+      setFilter("all")
+    }
+  }, [filter, isOnline, hasPendingSync])
 
   const handleLogoutClick = () => {
     if (!isOnline) {
@@ -169,6 +184,11 @@ export function DashboardScreen({
 
   const formatScore = (score: number, aiReady: boolean) =>
     aiReady ? `${score.toFixed(1)} / 10 (${Math.round(score * 10)}%)` : language === "en" ? "Awaiting AI" : "एआई की प्रतीक्षा"
+
+  const resetFilters = () => {
+    setFilter("all")
+    setDateFilter("")
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -229,7 +249,7 @@ export function DashboardScreen({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <p className="text-lg font-semibold opacity-95">
-              {t.welcome}, {ashaName || ashaId || (language === "en" ? "ASHA Worker" : "आशा कार्यकर्ता")}
+              {t.welcome}, {ashaName || (language === "en" ? "ASHA Worker" : "आशा कार्यकर्ता")}
             </p>
             <p className="flex items-center gap-1.5 text-sm opacity-80">
               <MapPin className="h-3.5 w-3.5" />
@@ -276,7 +296,10 @@ export function DashboardScreen({
           {(!isOnline || hasPendingSync) ? (
             <Card
               className="border-l-4 border-l-amber-500 cursor-pointer"
-              onClick={() => setFilter("needsSync")}
+              onClick={() => {
+                setFilter("needsSync")
+                if (isOnline) onSyncPendingUploads?.()
+              }}
             >
               <CardHeader className="p-3 pb-1">
                 <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
@@ -402,7 +425,20 @@ export function DashboardScreen({
               ))}
               {filteredPatients.length === 0 && (
                 <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-                  {language === "en" ? "No patients found" : "कोई मरीज़ नहीं मिला"}
+                  <div>
+                    {showFilterEmptyState
+                      ? language === "en"
+                        ? "No patients match the current filter."
+                        : "मौजूदा फ़िल्टर से कोई मरीज़ नहीं मिला।"
+                      : language === "en"
+                      ? "No patients found"
+                      : "कोई मरीज़ नहीं मिला"}
+                  </div>
+                  {showFilterEmptyState && (
+                    <Button variant="outline" size="sm" className="mt-3" onClick={resetFilters}>
+                      {language === "en" ? "Show All Patients" : "सभी मरीज दिखाएँ"}
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -457,7 +493,22 @@ export function DashboardScreen({
                   {filteredPatients.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                        {language === "en" ? "No patients found" : "कोई मरीज़ नहीं मिला"}
+                        <div className="flex flex-col items-center gap-2">
+                          <span>
+                            {showFilterEmptyState
+                              ? language === "en"
+                                ? "No patients match the current filter."
+                                : "मौजूदा फ़िल्टर से कोई मरीज़ नहीं मिला।"
+                              : language === "en"
+                              ? "No patients found"
+                              : "कोई मरीज़ नहीं मिला"}
+                          </span>
+                          {showFilterEmptyState && (
+                            <Button variant="outline" size="sm" onClick={resetFilters}>
+                              {language === "en" ? "Show All Patients" : "सभी मरीज दिखाएँ"}
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   )}
