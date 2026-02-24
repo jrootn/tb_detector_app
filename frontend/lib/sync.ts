@@ -28,6 +28,53 @@ interface AssignmentContext {
   assignedLabTechId?: string
 }
 
+function hasRemoteAudio(data: Record<string, unknown>): boolean {
+  const audio = data.audio
+  if (!Array.isArray(audio)) return false
+  return audio.some((entry) => {
+    if (!entry || typeof entry !== "object") return false
+    const map = entry as Record<string, unknown>
+    return (
+      typeof map.storage_path === "string" ||
+      typeof map.storage_uri === "string" ||
+      typeof map.url === "string"
+    )
+  })
+}
+
+async function cleanupSyncedAshaAudioUploads(userId: string): Promise<void> {
+  const uploads = (await getPendingUploads(userId)).filter(
+    (upload) => upload.role === "ASHA" && upload.kind === "audio" && upload.patientId !== "pending"
+  )
+  if (uploads.length === 0) return
+
+  const uniquePatientIds = Array.from(new Set(uploads.map((upload) => upload.patientId)))
+  const syncedPatientIds = new Set<string>()
+
+  await Promise.all(
+    uniquePatientIds.map(async (patientId) => {
+      try {
+        const snap = await getDoc(doc(db, "patients", patientId))
+        if (!snap.exists()) return
+        const data = (snap.data() || {}) as Record<string, unknown>
+        if (hasRemoteAudio(data)) {
+          syncedPatientIds.add(patientId)
+        }
+      } catch {
+        // Ignore lookup failures; regular sync retries will continue to handle these uploads.
+      }
+    })
+  )
+
+  if (syncedPatientIds.size === 0) return
+
+  await Promise.all(
+    uploads
+      .filter((upload) => syncedPatientIds.has(upload.patientId))
+      .map((upload) => removeUpload(upload.id))
+  )
+}
+
 function getErrorCode(error: unknown): string | undefined {
   if (typeof error === "object" && error !== null && "code" in error) {
     const code = (error as { code?: unknown }).code
@@ -640,6 +687,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
   try {
     if (options.uploadsOnly) {
       await syncUploads(currentUser.uid)
+      await cleanupSyncedAshaAudioUploads(currentUser.uid)
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("sync:complete"))
       }
@@ -707,6 +755,7 @@ export async function syncData(options: { uploadsOnly?: boolean } = {}) {
         await savePatients(patched)
       }
     }
+    await cleanupSyncedAshaAudioUploads(currentUser.uid)
 
     const localAfterSync = await getPatientsForAsha(currentUser.uid)
     const refreshed = await refreshLocalPatientsFromFirestore(currentUser.uid, localAfterSync)

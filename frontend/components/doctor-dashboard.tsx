@@ -51,6 +51,9 @@ interface PatientRecord {
   asha_name?: string
   asha_id?: string
   asha_worker_id?: string
+  rank_last_action?: string
+  rank_last_reason?: string
+  rank_last_updated_at?: string
 }
 
 interface DoctorDashboardProps {
@@ -79,6 +82,15 @@ function scoreSeverity(score: number | null): "High" | "Medium" | "Low" | "Pendi
 
 function formatScore(score: number): string {
   return `${score.toFixed(1)} / 10 (${Math.round(score * 10)}%)`
+}
+
+function hasManualDoctorRank(patient: PatientRecord): boolean {
+  return (
+    typeof patient.doctor_rank === "number" &&
+    (typeof patient.rank_last_updated_at === "string" ||
+      typeof patient.rank_last_reason === "string" ||
+      typeof patient.rank_last_action === "string")
+  )
 }
 
 export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps) {
@@ -210,8 +222,8 @@ export function DoctorDashboard({ doctorUid, facilityId }: DoctorDashboardProps)
       const aAwaiting = normalizeTriageStatus(a.status?.triage_status) === "TEST_QUEUED"
       const bAwaiting = normalizeTriageStatus(b.status?.triage_status) === "TEST_QUEUED"
       if (aAwaiting !== bAwaiting) return aAwaiting ? -1 : 1
-      const aHasRank = typeof a.doctor_rank === "number"
-      const bHasRank = typeof b.doctor_rank === "number"
+      const aHasRank = hasManualDoctorRank(a)
+      const bHasRank = hasManualDoctorRank(b)
       if (aHasRank && bHasRank) {
         if ((a.doctor_rank as number) !== (b.doctor_rank as number)) {
           return (a.doctor_rank as number) - (b.doctor_rank as number)

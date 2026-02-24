@@ -22,6 +22,9 @@ interface PatientRecord {
   created_at_offline?: string
   doctor_priority?: boolean
   doctor_rank?: number
+  rank_last_action?: string
+  rank_last_reason?: string
+  rank_last_updated_at?: string
   sample_id?: string
   asha_id?: string
   asha_worker_id?: string
@@ -34,6 +37,15 @@ function getPatientRiskScore(patient: PatientRecord): number | null {
   const numeric = typeof raw === "number" ? raw : Number(raw)
   if (!Number.isFinite(numeric)) return null
   return normalizeAiRiskScore(numeric)
+}
+
+function hasManualDoctorRank(patient: PatientRecord): boolean {
+  return (
+    typeof patient.doctor_rank === "number" &&
+    (typeof patient.rank_last_updated_at === "string" ||
+      typeof patient.rank_last_reason === "string" ||
+      typeof patient.rank_last_action === "string")
+  )
 }
 
 interface LabQueueProps {
@@ -109,9 +121,15 @@ export function LabQueue({ labUid, facilityId }: LabQueueProps) {
       const aPriority = a.doctor_priority ? 1 : 0
       const bPriority = b.doctor_priority ? 1 : 0
       if (aPriority !== bPriority) return bPriority - aPriority
-      const aRank = a.doctor_rank ?? 0
-      const bRank = b.doctor_rank ?? 0
-      if (aRank !== bRank) return aRank - bRank
+      const aHasRank = hasManualDoctorRank(a)
+      const bHasRank = hasManualDoctorRank(b)
+      if (aHasRank && bHasRank) {
+        const aRank = a.doctor_rank as number
+        const bRank = b.doctor_rank as number
+        if (aRank !== bRank) return aRank - bRank
+      } else if (aHasRank !== bHasRank) {
+        return aHasRank ? -1 : 1
+      }
       const aScore = getPatientRiskScore(a)
       const bScore = getPatientRiskScore(b)
       if (aScore == null && bScore != null) return 1
