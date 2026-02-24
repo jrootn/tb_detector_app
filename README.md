@@ -7,13 +7,14 @@ AI-assisted TB screening and triage for ASHA-centered field workflows, with real
 - Backend inference service: private Cloud Run (`tb-inference`) invoked through Cloud Tasks + OIDC.
 
 ## Reviewer Accounts (Competition Demo)
-Use these 3 accounts for role-based evaluation.  
-Password for all three: `password123`
+Use these accounts for role-based evaluation.  
+Password for all accounts: `password123`
 
 | Role | Email | Purpose |
 |---|---|---|
 | ASHA | `sunita.asha@indiatb.gov` | Field screening + offline collection |
 | Doctor | `aditi.doctor@indiatb.gov` | Clinical review + queue prioritization |
+| Lab | `rohan.lab@indiatb.gov` | Lab queue, sample processing order, report upload |
 | Admin (Control Tower) | `suresh.sts@indiatb.gov` | District/TU monitoring, operations, analytics |
 
 Use `/login` and sign in with one account at a time.
@@ -28,15 +29,25 @@ Use `/login` and sign in with one account at a time.
 - Real AI outputs are written under `ai.*` fields only.
 - First inference after idle can be slower (cold start + heavy model load); subsequent requests are faster.
 
+### Simple real-world workflow (India context)
+- Internet is often unreliable in the field, so ASHA workers collect data/audio offline first.
+- Many patients delay testing because going to labs means long waits and loss of daily wages.
+- Lab capacity is limited, so "first-come-first-served" is unsafe for TB triage.
+- This system ranks risk so higher-priority cases move earlier in lab workflow.
+- Doctor review is selective and targeted: not every case needs manual doctor intervention before lab actions.
+- Admin/STS view tracks queue pressure and facility-level bottlenecks.
+
 ### Quick demo sequence
 1. Open the live app: `https://tb-frontend-7z7c3myqlq-uk.a.run.app`
 2. Login as ASHA: `sunita.asha@indiatb.gov` / `password123`
 3. Create one screening (or open existing high-risk patients in ASHA dashboard).
 4. Wait for backend processing (typically seconds to a few minutes; cold start can be longer).
-5. Logout and login as Doctor: `aditi.doctor@indiatb.gov` / `password123`
-6. Show ranked queue, risk score, and AI summary on doctor side.
-7. Logout and login as Admin: `suresh.sts@indiatb.gov` / `password123`
-8. Show Control Tower analytics, risk distribution, and facility-level operations.
+5. Logout and login as Lab: `rohan.lab@indiatb.gov` / `password123`
+6. Show lab queue ordering by urgency/risk and upload a lab report for one case.
+7. Logout and login as Doctor: `aditi.doctor@indiatb.gov` / `password123`
+8. Show ranked queue, risk score, and AI summary on doctor side.
+9. Logout and login as Admin: `suresh.sts@indiatb.gov` / `password123`
+10. Show Control Tower analytics, risk distribution, and facility-level operations.
 
 ### Optional validation checks (for judges)
 - Confirm AI bilingual summary fields exist: `ai.medgemini_summary_en`, `ai.medgemini_summary_hi`.
@@ -55,12 +66,16 @@ Use `/login` and sign in with one account at a time.
 Rural TB case finding faces operational gaps:
 - Symptom capture is done in low-connectivity settings.
 - Risk ranking is inconsistent and often manual.
+- Lab infrastructure is constrained, so first-come-first-served queues can delay high-risk patients.
+- Many workers and patients lose daily wages if they spend long hours traveling/waiting for tests.
 - Clinical handoff across ASHA -> Lab -> Doctor is fragmented.
 - AI proof-of-concept systems fail when they overwrite clinical records, use dummy outputs, or break under poor network conditions.
 
 This project solves those constraints by:
 - keeping ASHA workflows offline-first,
 - using deterministic event-driven backend inference,
+- routing actionable high-risk cases into prioritized lab workflow,
+- enabling targeted doctor intervention where needed instead of forcing doctor approval for every case,
 - writing only `ai.*` outputs to preserve clinical data integrity,
 - and presenting actionable ranked queues for Doctor and Lab roles.
 
