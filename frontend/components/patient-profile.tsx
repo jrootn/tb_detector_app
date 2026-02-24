@@ -1,18 +1,15 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useLanguage } from "@/lib/language-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   Activity,
   ArrowLeft,
   Brain,
-  Calendar,
   CheckCircle2,
   ClipboardList,
   Mic,
@@ -21,16 +18,17 @@ import {
 } from "lucide-react"
 import { LanguageSwitcher } from "./language-switcher"
 import type { Patient, RiskLevel } from "@/lib/mockData"
+import { PatientNotesThread } from "@/components/patient-notes-thread"
 
 interface PatientProfileProps {
   patient: Patient
   onBack: () => void
+  onUpdatePatient: (patient: Patient) => void
 }
 
-export function PatientProfile({ patient, onBack }: PatientProfileProps) {
+export function PatientProfile({ patient, onBack, onUpdatePatient }: PatientProfileProps) {
   const { t, language } = useLanguage()
-  const [scheduledDate, setScheduledDate] = useState(patient.scheduledTestDate || "")
-  const [showDatePicker, setShowDatePicker] = useState(false)
+  const [activeHelpStage, setActiveHelpStage] = useState<string | null>(null)
 
   const getRiskBadgeStyle = (level: RiskLevel) => {
     switch (level) {
@@ -109,11 +107,71 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
         return t.historyOfCovid
       case "historyOfHIV":
         return t.historyOfHIV
+      case "nightSweats":
+        return t.nightSweats
+      case "weightLoss":
+        return t.weightLoss
       default:
         return factor
     }
   }
+
+  const getAnswerLabel = (answer?: Patient["nightSweats"]) => {
+    if (!answer) return "-"
+    if (answer === "yes") return t.yes
+    if (answer === "no") return t.no
+    if (answer === "dontKnow") return t.dontKnow
+    return t.preferNotToSay
+  }
+
+  const getLocalizedReasoning = (p: Patient) => {
+    const i18n = p.medGemmaReasoningI18n
+    if (language === "hi") {
+      return i18n?.hi || i18n?.en || p.medGemmaReasoning || ""
+    }
+    return i18n?.en || p.medGemmaReasoning || i18n?.hi || ""
+  }
   
+  const stages = [
+    { key: "collected", label: t.collected, help: t.collectedHelp, done: true },
+    { key: "synced", label: t.synced, help: t.syncedHelp, done: !patient.needsSync },
+    {
+      key: "ai",
+      label: t.aiAnalysisDone,
+      help: t.aiAnalysisDoneHelp,
+      done: Boolean(patient.medGemmaReasoning || patient.medGemmaReasoningI18n?.en || patient.medGemmaReasoningI18n?.hi || patient.hearAudioScore),
+    },
+    {
+      key: "doctor",
+      label: t.doctorReviewed,
+      help: t.doctorReviewedHelp,
+      done: patient.status !== "awaitingDoctor",
+    },
+    {
+      key: "scheduled",
+      label: t.testScheduledLabel,
+      help: t.testScheduledHelp,
+      done: Boolean(
+        patient.testScheduled ||
+          patient.status === "testPending" ||
+          patient.status === "underTreatment" ||
+          patient.status === "cleared"
+      ),
+    },
+    {
+      key: "completed",
+      label: t.testCompleted,
+      help: t.testCompletedHelp,
+      done: patient.status === "underTreatment" || patient.status === "cleared",
+    },
+  ]
+
+  useEffect(() => {
+    if (!activeHelpStage) return
+    const timer = setTimeout(() => setActiveHelpStage(null), 2500)
+    return () => clearTimeout(timer)
+  }, [activeHelpStage])
+
   // Helper to format cough duration (now in days)
   const formatCoughDuration = (days?: number) => {
     if (!days) return "-"
@@ -124,13 +182,6 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
       return `${weeks} ${t.weeks}`
     }
     return `${weeks} ${t.weeks} ${remainingDays} ${t.days}`
-  }
-
-  const handleScheduleTest = () => {
-    if (scheduledDate) {
-      alert(`${t.testScheduled}: ${scheduledDate}`)
-      setShowDatePicker(false)
-    }
   }
 
   return (
@@ -161,6 +212,9 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
             <p className="text-sm text-muted-foreground">
               {patient.age} {language === "en" ? "years" : "वर्ष"} | {patient.pincode}
             </p>
+            <p className="text-sm font-medium text-foreground">
+              Sample ID: {patient.sampleId || "-"}
+            </p>
             <p className="text-xs text-muted-foreground line-clamp-1">
               {language === "en" ? patient.address : patient.addressHi}
             </p>
@@ -172,6 +226,31 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
             </Badge>
             <p className="text-sm font-medium mt-1">{getRiskLabel(patient.riskLevel)} {t.riskScore}</p>
           </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {stages.map((stage) => (
+            <div key={stage.key} className="relative group">
+              <button
+                type="button"
+                onClick={() => setActiveHelpStage((prev) => (prev === stage.key ? null : stage.key))}
+                className={`w-full rounded-md border px-2.5 py-2 text-center text-xs font-medium ${
+                  stage.done
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {stage.label}
+              </button>
+              <div
+                className={`pointer-events-none absolute left-1/2 top-full z-20 mt-1 w-44 -translate-x-1/2 rounded-md bg-foreground px-2 py-1 text-[10px] text-background shadow-md ${
+                  activeHelpStage === stage.key ? "block" : "hidden group-hover:block group-focus-within:block"
+                }`}
+              >
+                {stage.help}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -200,7 +279,7 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
                 <CardTitle className="text-base">{t.vitals}</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                   <div>
                     <p className="text-sm text-muted-foreground">{t.weight}</p>
                     <p className="font-medium">{patient.weight || "-"} kg</p>
@@ -208,6 +287,16 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
                   <div>
                     <p className="text-sm text-muted-foreground">{t.height}</p>
                     <p className="font-medium">{patient.height || "-"} cm</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.heartRate}</p>
+                    <p className="font-medium">{patient.heartRateBpm || "-"} bpm</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.bodyTemperature}</p>
+                    <p className="font-medium">
+                      {patient.bodyTemperature != null ? `${patient.bodyTemperature}°${patient.bodyTemperatureUnit || "C"}` : "-"}
+                    </p>
                   </div>
                 </div>
               </CardContent>
@@ -235,6 +324,17 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
                 <div>
                   <p className="text-sm text-muted-foreground">{t.feverHistory}</p>
                   <p className="font-medium">{getFeverLabel(patient.feverHistory)}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.nightSweats}</p>
+                    <p className="font-medium">{getAnswerLabel(patient.nightSweats)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.weightLoss}</p>
+                    <p className="font-medium">{getAnswerLabel(patient.weightLoss)}</p>
+                  </div>
                 </div>
 
                 {patient.physicalSigns && patient.physicalSigns.length > 0 && (
@@ -329,7 +429,7 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
               </CardHeader>
               <CardContent>
                 <p className="text-sm leading-relaxed text-foreground bg-muted/50 p-3 rounded-lg border">
-                  {patient.medGemmaReasoning || (language === "en"
+                  {getLocalizedReasoning(patient) || (language === "en"
                     ? "No AI analysis available for this patient."
                     : "इस मरीज के लिए कोई एआई विश्लेषण उपलब्ध नहीं है।")}
                 </p>
@@ -339,59 +439,6 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
 
           {/* Actions Tab */}
           <TabsContent value="actions" className="mt-4 space-y-4">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Calendar className="h-5 w-5 text-primary" />
-                  {t.scheduleTest}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {!showDatePicker ? (
-                  <div>
-                    {scheduledDate ? (
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm text-muted-foreground">
-                            {language === "en" ? "Test scheduled for:" : "परीक्षण निर्धारित:"}
-                          </p>
-                          <p className="font-medium text-lg">{scheduledDate}</p>
-                        </div>
-                        <Button variant="outline" onClick={() => setShowDatePicker(true)}>
-                          {language === "en" ? "Change" : "बदलें"}
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button onClick={() => setShowDatePicker(true)} className="w-full">
-                        <Calendar className="h-4 w-4 mr-2" />
-                        {t.scheduleTest}
-                      </Button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="space-y-2">
-                      <Label>{language === "en" ? "Select Date" : "तारीख चुनें"}</Label>
-                      <Input
-                        type="date"
-                        value={scheduledDate}
-                        onChange={(e) => setScheduledDate(e.target.value)}
-                        min={new Date().toISOString().split("T")[0]}
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <Button variant="outline" onClick={() => setShowDatePicker(false)} className="flex-1">
-                        {language === "en" ? "Cancel" : "रद्द करें"}
-                      </Button>
-                      <Button onClick={handleScheduleTest} className="flex-1">
-                        {language === "en" ? "Confirm" : "पुष्टि करें"}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center gap-2">
@@ -412,6 +459,15 @@ export function PatientProfile({ patient, onBack }: PatientProfileProps) {
                     </li>
                   ))}
                 </ul>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Case Notes</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <PatientNotesThread patientId={patient.id} viewerRole="ASHA" />
               </CardContent>
             </Card>
           </TabsContent>

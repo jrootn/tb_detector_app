@@ -1,5 +1,6 @@
 export type RiskLevel = "high" | "medium" | "low"
 export type PatientStatus = "awaitingDoctor" | "testPending" | "underTreatment" | "cleared"
+export type RiskFactorAnswer = "yes" | "no" | "dontKnow" | "preferNotToSay"
 
 export interface Patient {
   id: string
@@ -24,23 +25,36 @@ export interface Patient {
   // Vitals
   weight?: number
   height?: number
+  heartRateBpm?: number
+  bodyTemperature?: number
+  bodyTemperatureUnit?: "C" | "F"
   
   // Clinical Data
   coughDuration?: number
   coughNature?: "dry" | "wet" | "bloodStained"
   feverHistory?: "none" | "lowGrade" | "highGrade"
+  nightSweats?: RiskFactorAnswer
+  weightLoss?: RiskFactorAnswer
   physicalSigns?: string[]
   riskFactors?: string[]
+  riskFactorAnswers?: Record<string, RiskFactorAnswer>
   otherObservations?: string
   
   // AI Analysis
   hearAudioScore?: number
   medGemmaReasoning?: string
+  medGemmaReasoningI18n?: {
+    en?: string
+    hi?: string
+  }
   
   // Dates
   createdAt: string
   collectionDate: string
   scheduledTestDate?: string
+
+  // Sample ID for lab matching
+  sampleId?: string
   
   // GPS Location (stored but not displayed)
   latitude?: number
@@ -98,7 +112,7 @@ export const mockPatients: Patient[] = [
     riskLevel: "high",
     status: "testPending",
     distanceToPHC: 12.3,
-    needsSync: true,
+    needsSync: false,
     testScheduled: false,
     weight: 45,
     height: 155,
@@ -144,7 +158,7 @@ export const mockPatients: Patient[] = [
     medGemmaReasoning: "Moderate TB suspicion. Productive cough with low-grade fever. Smoking history increases respiratory risk. Sputum examination advised.",
     createdAt: "2026-01-30",
     collectionDate: "2026-01-30",
-    scheduledTestDate: "2026-02-08",
+    scheduledTestDate: "2026-02-09",
     latitude: 26.1542,
     longitude: 85.8918,
   },
@@ -164,7 +178,7 @@ export const mockPatients: Patient[] = [
     riskLevel: "medium",
     status: "testPending",
     distanceToPHC: 15.8,
-    needsSync: true,
+    needsSync: false,
     testScheduled: false,
     weight: 52,
     height: 160,
@@ -260,7 +274,7 @@ export const mockPatients: Patient[] = [
     riskLevel: "low",
     status: "testPending",
     distanceToPHC: 10.2,
-    needsSync: true,
+    needsSync: false,
     testScheduled: true,
     weight: 70,
     height: 175,
@@ -273,7 +287,7 @@ export const mockPatients: Patient[] = [
     medGemmaReasoning: "Low-moderate suspicion. Age and diabetes are risk factors. Short duration cough needs monitoring. Routine sputum test scheduled.",
     createdAt: "2026-02-02",
     collectionDate: "2026-02-02",
-    scheduledTestDate: "2026-02-10",
+    scheduledTestDate: "2026-02-09",
     latitude: 26.1197,
     longitude: 85.3910,
   },
@@ -377,10 +391,11 @@ export const mockPatients: Patient[] = [
 
 // Statistics calculated from mock data
 export function getStats(patients: Patient[]) {
+  const today = new Date().toISOString().split("T")[0]
   return {
     highRisk: patients.filter((p) => p.riskLevel === "high").length,
     pendingUploads: patients.filter((p) => p.needsSync).length,
-    testsToday: patients.filter((p) => p.testScheduled).length,
+    testsToday: patients.filter((p) => p.scheduledTestDate === today || (p.testScheduled && p.scheduledTestDate === today)).length,
     total: patients.length,
   }
 }

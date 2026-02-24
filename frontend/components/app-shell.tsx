@@ -7,9 +7,12 @@ import { DashboardScreen } from "./dashboard-screen"
 import { ScreeningFlow } from "./screening-flow"
 import { PatientProfile } from "./patient-profile"
 import { PriorityView } from "./priority-view"
+import { UserProfileSettings } from "./user-profile-settings"
 import { mockPatients, type Patient } from "@/lib/mockData"
+import { getAllPatients, savePatients, seedPatientsIfEmpty, getPendingUploadCount } from "@/lib/db"
+import { syncData } from "@/lib/sync"
 
-type Screen = "login" | "dashboard" | "screening" | "profile" | "priority"
+type Screen = "login" | "dashboard" | "screening" | "profile" | "priority" | "settings"
 
 interface GPSLocation {
   latitude: number | null
@@ -17,12 +20,28 @@ interface GPSLocation {
   error: string | null
 }
 
-export function AppShell() {
-  const [currentScreen, setCurrentScreen] = useState<Screen>("login")
+interface AppShellProps {
+  initialScreen?: Screen
+  initialAshaId?: string
+  initialAshaName?: string
+  onLogout?: () => void
+}
+
+export function AppShell({
+  initialScreen = "login",
+  initialAshaId = "",
+  initialAshaName = "",
+  onLogout,
+}: AppShellProps) {
+  const enableMockSeed = process.env.NEXT_PUBLIC_ENABLE_MOCK_SEED === "1"
+  const [currentScreen, setCurrentScreen] = useState<Screen>(initialScreen)
   const [isOnline, setIsOnline] = useState(true)
-  const [ashaId, setAshaId] = useState("")
-  const [patients, setPatients] = useState<Patient[]>(mockPatients)
+  const [ashaId, setAshaId] = useState(initialAshaId)
+  const [ashaName, setAshaName] = useState(initialAshaName)
+  const [pendingUploads, setPendingUploads] = useState(0)
+  const [patients, setPatients] = useState<Patient[]>([])
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null)
+  const [dbReady, setDbReady] = useState(false)
   const [gpsLocation, setGpsLocation] = useState<GPSLocation>({
     latitude: null,
     longitude: null,
@@ -86,6 +105,96 @@ export function AppShell() {
     }
   }, [])
 
+  // Load patients from IndexedDB
+  useEffect(() => {
+    let isMounted = true
+    const loadPatients = async () => {
+      try {
+        if (enableMockSeed) {
+          await seedPatientsIfEmpty(mockPatients)
+        }
+        const stored = await getAllPatients()
+        if (isMounted && stored.length > 0) {
+          setPatients(stored)
+        }
+        const pendingCount = await getPendingUploadCount(initialAshaId || undefined)
+        const needsSyncCount = stored.filter((p) => p.needsSync).length
+        if (isMounted) setPendingUploads(pendingCount + needsSyncCount)
+      } catch (error) {
+        console.error("Failed to load patients from IndexedDB", error)
+      } finally {
+        if (isMounted) setDbReady(true)
+      }
+    }
+
+    loadPatients()
+    return () => {
+      isMounted = false
+    }
+  }, [enableMockSeed])
+
+  // Refresh from IndexedDB after sync completes
+  useEffect(() => {
+    const handler = async () => {
+      const stored = await getAllPatients()
+      setPatients(stored)
+      const pendingCount = await getPendingUploadCount(ashaId || undefined)
+      const needsSyncCount = stored.filter((p) => p.needsSync).length
+      setPendingUploads(pendingCount + needsSyncCount)
+    }
+
+    window.addEventListener("sync:complete", handler)
+    return () => {
+      window.removeEventListener("sync:complete", handler)
+    }
+  }, [])
+
+  // When back online, refresh local cache to clear stale sync flags
+  useEffect(() => {
+    if (!dbReady || !isOnline) return
+    getAllPatients().then(setPatients).catch(() => undefined)
+    Promise.all([getAllPatients(), getPendingUploadCount(ashaId || undefined)])
+      .then(([stored, pendingCount]) => {
+        const needsSyncCount = stored.filter((p) => p.needsSync).length
+        setPendingUploads(pendingCount + needsSyncCount)
+      })
+      .catch(() => undefined)
+  }, [dbReady, isOnline])
+
+  // Periodic foreground sync keeps ASHA risk/status cards aligned with backend AI updates.
+  useEffect(() => {
+    if (!dbReady || !isOnline || !ashaId || currentScreen === "login") return
+    let cancelled = false
+    let inFlight = false
+
+    const runSync = async () => {
+      if (cancelled || inFlight) return
+      inFlight = true
+      try {
+        await syncData()
+      } catch (error) {
+        console.warn("Periodic sync failed", error)
+      } finally {
+        inFlight = false
+      }
+    }
+
+    runSync()
+    const timer = window.setInterval(runSync, 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [dbReady, isOnline, ashaId, currentScreen])
+
+  // Persist patient changes to IndexedDB
+  useEffect(() => {
+    if (!dbReady) return
+    savePatients(patients).catch((error) => {
+      console.error("Failed to save patients to IndexedDB", error)
+    })
+  }, [patients, dbReady])
+
   const handleLogin = useCallback((id: string) => {
     setAshaId(id)
     setCurrentScreen("dashboard")
@@ -96,17 +205,31 @@ export function AppShell() {
       // Can't logout when offline - this will be handled in dashboard
       return
     }
+    if (onLogout) {
+      onLogout()
+      return
+    }
     setAshaId("")
     setCurrentScreen("login")
-  }, [isOnline])
+  }, [isOnline, onLogout])
 
   const handleViewPatient = useCallback((patient: Patient) => {
     setSelectedPatient(patient)
     setCurrentScreen("profile")
   }, [])
 
+  const handleUpdatePatient = useCallback((updated: Patient) => {
+    setPatients((prev) => prev.map((patient) => (patient.id === updated.id ? updated : patient)))
+    setSelectedPatient(updated)
+  }, [])
+
   const handleScreeningComplete = useCallback((newPatient: Patient) => {
     setPatients((prev) => [newPatient, ...prev])
+    if (navigator.onLine) {
+      syncData().catch((error) => {
+        console.warn("Auto-sync after screening failed", error)
+      })
+    }
     setCurrentScreen("dashboard")
   }, [])
 
@@ -118,12 +241,15 @@ export function AppShell() {
         {currentScreen === "dashboard" && (
           <DashboardScreen
             ashaId={ashaId}
+            ashaName={ashaName}
             isOnline={isOnline}
             patients={patients}
+            pendingUploads={pendingUploads}
             onLogout={handleLogout}
             onNewScreening={() => setCurrentScreen("screening")}
             onViewPatient={handleViewPatient}
             onViewPriority={() => setCurrentScreen("priority")}
+            onOpenProfile={() => setCurrentScreen("settings")}
             gpsLocation={gpsLocation}
           />
         )}
@@ -142,6 +268,7 @@ export function AppShell() {
           <PatientProfile
             patient={selectedPatient}
             onBack={() => setCurrentScreen("dashboard")}
+            onUpdatePatient={handleUpdatePatient}
           />
         )}
 
@@ -150,6 +277,14 @@ export function AppShell() {
             patients={patients.filter((p) => p.riskLevel === "high" || p.riskLevel === "medium")}
             onBack={() => setCurrentScreen("dashboard")}
             onViewPatient={handleViewPatient}
+          />
+        )}
+
+        {currentScreen === "settings" && (
+          <UserProfileSettings
+            expectedRole="ASHA"
+            title="ASHA Profile"
+            onBack={() => setCurrentScreen("dashboard")}
           />
         )}
       </div>

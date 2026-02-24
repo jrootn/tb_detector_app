@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useLanguage } from "@/lib/language-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,9 +10,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { Slider } from "@/components/ui/slider"
 import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Activity, ArrowLeft, ArrowRight, Check, Mic, MicOff, AlertTriangle } from "lucide-react"
+import { Activity, ArrowLeft, ArrowRight, Check, AlertTriangle, Mic, Square } from "lucide-react"
+import { toast } from "sonner"
 import { LanguageSwitcher } from "./language-switcher"
 import { submitScreening, calculateRiskScore, type ScreeningData } from "@/lib/api"
+import { addUpload, assignPendingUploadsToPatient } from "@/lib/db"
 import type { Patient, RiskLevel } from "@/lib/mockData"
 
 interface GPSLocation {
@@ -56,11 +58,16 @@ interface FormData {
   // Vitals
   weight: string
   height: string
+  heartRate: string
+  bodyTemperature: string
+  bodyTemperatureUnit: "C" | "F"
   
   // Clinical
   coughDuration: number // Now in days
   coughNature: CoughNature
   feverHistory: FeverHistory
+  nightSweats: RiskFactorAnswer
+  weightLoss: RiskFactorAnswer
   physicalSigns: string[]
   riskFactors: RiskFactorState
   otherObservations: string
@@ -86,6 +93,18 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
   const { t, language } = useLanguage()
   const [step, setStep] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [formError, setFormError] = useState("")
+  const [showSampleId, setShowSampleId] = useState(false)
+  const [generatedSampleId, setGeneratedSampleId] = useState<string | null>(null)
+  const [pendingPatient, setPendingPatient] = useState<Patient | null>(null)
+  const [uploadedAudioName, setUploadedAudioName] = useState<string>("")
+  const [uploadedAudioPreview, setUploadedAudioPreview] = useState<string>("")
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
+  const [recordingError, setRecordingError] = useState("")
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const recordedChunksRef = useRef<BlobPart[]>([])
   const totalSteps = 4
   
   const [formData, setFormData] = useState<FormData>({
@@ -98,9 +117,14 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     aadhar: "",
     weight: "",
     height: "",
+    heartRate: "",
+    bodyTemperature: "",
+    bodyTemperatureUnit: "C",
     coughDuration: 0,
     coughNature: "dry",
     feverHistory: "none",
+    nightSweats: "no",
+    weightLoss: "no",
     physicalSigns: [],
     riskFactors: initialRiskFactors,
     otherObservations: "",
@@ -110,47 +134,220 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       slot3: "idle",
     },
   })
+  const answerOptions = [
+    { value: "yes" as const, label: t.yes },
+    { value: "no" as const, label: t.no },
+    { value: "dontKnow" as const, label: t.dontKnow },
+    { value: "preferNotToSay" as const, label: t.preferNotToSay },
+  ]
+
+  const validateStep = (stepNumber: number): string | null => {
+    const phoneDigits = formData.phone.replace(/\D/g, "")
+    if (stepNumber === 1) {
+      if (formData.name.trim().length < 2) {
+        return language === "en" ? "Please enter patient name." : "कृपया मरीज का नाम दर्ज करें।"
+      }
+      const age = Number(formData.age)
+      if (!Number.isFinite(age) || age < 1 || age > 120) {
+        return language === "en" ? "Please enter a valid age." : "कृपया सही उम्र दर्ज करें।"
+      }
+      if (phoneDigits.length !== 10) {
+        return language === "en" ? "Please enter a valid 10-digit phone number." : "कृपया सही 10 अंकों का फोन नंबर दर्ज करें।"
+      }
+      if (formData.address.trim().length < 5) {
+        return language === "en" ? "Please enter full address." : "कृपया पूरा पता दर्ज करें।"
+      }
+      if (!/^\d{6}$/.test(formData.pincode.trim())) {
+        return language === "en" ? "Please enter a valid 6-digit pincode." : "कृपया सही 6 अंकों का पिनकोड दर्ज करें।"
+      }
+    }
+    if (stepNumber === 2) {
+      const weight = Number(formData.weight)
+      const height = Number(formData.height)
+      const heartRate = Number(formData.heartRate)
+      const bodyTemperature = Number(formData.bodyTemperature)
+      if (!Number.isFinite(weight) || weight <= 0) {
+        return language === "en" ? "Please enter valid weight." : "कृपया सही वजन दर्ज करें।"
+      }
+      if (!Number.isFinite(height) || height <= 0) {
+        return language === "en" ? "Please enter valid height." : "कृपया सही ऊंचाई दर्ज करें।"
+      }
+      if (formData.heartRate.trim() && (!Number.isFinite(heartRate) || heartRate < 20 || heartRate > 250)) {
+        return language === "en" ? "Heart rate should be between 20 and 250 bpm." : "हृदय गति 20 से 250 bpm के बीच होनी चाहिए।"
+      }
+      if (formData.bodyTemperature.trim()) {
+        const min = formData.bodyTemperatureUnit === "F" ? 86 : 30
+        const max = formData.bodyTemperatureUnit === "F" ? 113 : 45
+        if (!Number.isFinite(bodyTemperature) || bodyTemperature < min || bodyTemperature > max) {
+          return language === "en"
+            ? `Temperature should be between ${min} and ${max}°${formData.bodyTemperatureUnit}.`
+            : `तापमान ${min} और ${max}°${formData.bodyTemperatureUnit} के बीच होना चाहिए।`
+        }
+      }
+    }
+    if (stepNumber === 4 && !uploadedAudioName) {
+      return language === "en" ? "Please upload one cough audio file before submit." : "सबमिट से पहले एक खांसी ऑडियो फ़ाइल अपलोड करें।"
+    }
+    return null
+  }
 
   const handleNext = () => {
+    const error = validateStep(step)
+    if (error) {
+      setFormError(error)
+      return
+    }
+    setFormError("")
     if (step < totalSteps) {
       setStep(step + 1)
     }
   }
 
   const handlePrevious = () => {
+    setFormError("")
     if (step > 1) {
       setStep(step - 1)
     }
   }
 
-  const simulateRecording = (slot: "slot1" | "slot2" | "slot3") => {
+  const handleAudioUpload = async (file: File) => {
+    const upload = {
+      id: `${Date.now()}-${file.name}`,
+      ownerUid: ashaId,
+      patientId: "pending",
+      role: "ASHA" as const,
+      kind: "audio" as const,
+      fileName: file.name,
+      mimeType: file.type || "audio/wav",
+      blob: file,
+      createdAt: new Date().toISOString(),
+    }
+    await addUpload(upload)
+    if (uploadedAudioPreview) {
+      URL.revokeObjectURL(uploadedAudioPreview)
+    }
+    const preview = URL.createObjectURL(file)
+    setUploadedAudioName(file.name)
+    setUploadedAudioPreview(preview)
+    setFormError("")
     setFormData((prev) => ({
       ...prev,
-      audioRecordings: {
-        ...prev.audioRecordings,
-        [slot]: "recording",
-      },
+      audioRecordings: { ...prev.audioRecordings, slot1: "good", slot2: "idle", slot3: "idle" },
     }))
-
-    // Simulate recording for 1-3 seconds
-    const duration = Math.random() * 2000 + 1000
-    setTimeout(() => {
-      const isGood = duration > 2000
-      setFormData((prev) => ({
-        ...prev,
-        audioRecordings: {
-          ...prev.audioRecordings,
-          [slot]: isGood ? "good" : "tooShort",
-        },
-      }))
-    }, duration)
+    toast.success(language === "en" ? "Audio saved for sync." : "ऑडियो सिंक के लिए सहेजा गया।")
   }
 
+  const stopMediaTracks = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+      mediaStreamRef.current = null
+    }
+  }
+
+  const startRecording = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setRecordingError(
+        language === "en"
+          ? "Microphone recording is not supported on this device/browser."
+          : "इस डिवाइस/ब्राउज़र में माइक्रोफोन रिकॉर्डिंग सपोर्ट नहीं है।"
+      )
+      return
+    }
+    try {
+      setRecordingError("")
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaStreamRef.current = stream
+      recordedChunksRef.current = []
+
+      const preferredMime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm"
+      const recorder = new MediaRecorder(stream, { mimeType: preferredMime })
+      mediaRecorderRef.current = recorder
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordedChunksRef.current.push(event.data)
+      }
+      recorder.onstop = async () => {
+        const blob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || "audio/webm" })
+        if (blob.size === 0) {
+          setRecordingError(language === "en" ? "Recording failed. Please retry." : "रिकॉर्डिंग विफल हुई। फिर प्रयास करें।")
+          stopMediaTracks()
+          return
+        }
+        const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("mp4") ? "m4a" : "webm"
+        const file = new File([blob], `cough-${Date.now()}.${ext}`, { type: blob.type })
+        await handleAudioUpload(file)
+        stopMediaTracks()
+      }
+
+      recorder.start(250)
+      setRecordingSeconds(0)
+      setIsRecording(true)
+    } catch (error) {
+      setRecordingError(
+        language === "en"
+          ? "Microphone permission denied or unavailable."
+          : "माइक्रोफोन अनुमति नहीं मिली या उपलब्ध नहीं है।"
+      )
+      stopMediaTracks()
+    }
+  }
+
+  const stopRecording = () => {
+    const recorder = mediaRecorderRef.current
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop()
+    }
+    setIsRecording(false)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (uploadedAudioPreview) URL.revokeObjectURL(uploadedAudioPreview)
+      const recorder = mediaRecorderRef.current
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop()
+      }
+      stopMediaTracks()
+    }
+  }, [uploadedAudioPreview])
+
+  useEffect(() => {
+    if (!isRecording) return
+    const timer = window.setInterval(() => {
+      setRecordingSeconds((prev) => prev + 1)
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [isRecording])
+
   const handleSubmit = async () => {
+    for (const s of [1, 2, 3, 4]) {
+      const error = validateStep(s)
+      if (error) {
+        setFormError(error)
+        setStep(s)
+        return
+      }
+    }
+    setFormError("")
     setIsSubmitting(true)
 
-    // Convert risk factors to array of positive responses
-    const positiveRiskFactors = Object.entries(formData.riskFactors)
+    const riskFactorAnswers = {
+      ...formData.riskFactors,
+      nightSweats: formData.nightSweats,
+      weightLoss: formData.weightLoss,
+    }
+    const parsedBodyTemperature = formData.bodyTemperature ? parseFloat(formData.bodyTemperature) : undefined
+    const normalizedBodyTemperature =
+      parsedBodyTemperature == null || Number.isNaN(parsedBodyTemperature)
+        ? undefined
+        : formData.bodyTemperatureUnit === "F"
+        ? Math.round((((parsedBodyTemperature - 32) * 5) / 9) * 10) / 10
+        : parsedBodyTemperature
+
+    // Keep positive flags for lightweight ranking UIs, while preserving full answers separately.
+    const positiveRiskFactors = Object.entries(riskFactorAnswers)
       .filter(([, value]) => value === "yes")
       .map(([key]) => key)
 
@@ -168,17 +365,23 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       coughDuration: Math.ceil(formData.coughDuration / 7), // Convert days to weeks for API
       coughNature: formData.coughNature,
       feverHistory: formData.feverHistory,
+      nightSweats: formData.nightSweats,
+      weightLoss: formData.weightLoss,
       physicalSigns: formData.physicalSigns,
       riskFactors: positiveRiskFactors,
+      riskFactorAnswers,
       otherObservations: formData.otherObservations,
       audioRecordings: {
         slot1: formData.audioRecordings.slot1 === "good",
-        slot2: formData.audioRecordings.slot2 === "good",
-        slot3: formData.audioRecordings.slot3 === "good",
+        slot2: false,
+        slot3: false,
       },
       submittedAt: new Date().toISOString(),
       ashaWorkerId: ashaId,
       isOffline: !isOnline,
+      heartRateBpm: formData.heartRate ? parseFloat(formData.heartRate) : undefined,
+      bodyTemperature: normalizedBodyTemperature,
+      bodyTemperatureUnit: "C",
     }
 
     const result = await submitScreening(screeningData)
@@ -190,6 +393,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
     else if (riskScore >= 4) riskLevel = "medium"
 
     // Create new patient
+    const sampleId = `TX-${Math.floor(100 + Math.random() * 900)}`
     const newPatient: Patient = {
       id: result.patientId,
       name: formData.name,
@@ -200,38 +404,42 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       address: formData.address,
       addressHi: formData.address,
       pincode: formData.pincode,
+      aadhar: formData.aadhar || undefined,
       village: formData.address.split(",").pop()?.trim() || formData.address,
       villageHi: formData.address.split(",").pop()?.trim() || formData.address,
       riskScore,
       riskLevel,
       status: "awaitingDoctor",
       distanceToPHC: Math.round(Math.random() * 20 + 2),
-      needsSync: !isOnline,
+      needsSync: true,
       testScheduled: false,
       weight: parseFloat(formData.weight) || undefined,
       height: parseFloat(formData.height) || undefined,
+      heartRateBpm: formData.heartRate ? parseFloat(formData.heartRate) : undefined,
+      bodyTemperature: normalizedBodyTemperature,
+      bodyTemperatureUnit: "C",
       coughDuration: formData.coughDuration,
       coughNature: formData.coughNature,
       feverHistory: formData.feverHistory,
+      nightSweats: formData.nightSweats,
+      weightLoss: formData.weightLoss,
       physicalSigns: formData.physicalSigns,
       riskFactors: positiveRiskFactors,
+      riskFactorAnswers,
       otherObservations: formData.otherObservations,
-      hearAudioScore: Math.random() * 0.5 + 0.3,
-      medGemmaReasoning: generateAIReasoning(screeningData),
       createdAt: today,
       collectionDate: today,
       latitude: gpsLocation.latitude || undefined,
       longitude: gpsLocation.longitude || undefined,
+      sampleId,
     }
 
-    if (!isOnline) {
-      alert(t.savedToLocal)
-    } else {
-      alert(t.screeningSubmitted)
-    }
+    await assignPendingUploadsToPatient(newPatient.id, ashaId)
 
+    setGeneratedSampleId(sampleId)
+    setPendingPatient(newPatient)
+    setShowSampleId(true)
     setIsSubmitting(false)
-    onComplete(newPatient)
   }
 
   const togglePhysicalSign = (sign: string) => {
@@ -263,6 +471,37 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       return `${weeks} ${t.weeks}`
     }
     return `${weeks} ${t.weeks} ${remainingDays} ${t.days}`
+  }
+
+  if (showSampleId && generatedSampleId && pendingPatient) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center bg-background">
+        <div className="max-w-md space-y-4">
+          <div className="text-sm text-muted-foreground">
+            {language === "en"
+              ? "Write this ID on the Sputum Cup using a marker."
+              : "इस आईडी को मार्कर से सैंपल कप पर लिखें।"}
+          </div>
+          <div className="text-5xl font-bold tracking-widest">{generatedSampleId}</div>
+          <Button
+            className="w-full"
+            onClick={() => {
+              if (!isOnline) {
+                toast.success(t.savedToLocal)
+              } else {
+                toast.success(t.screeningSubmitted)
+              }
+              setShowSampleId(false)
+              onComplete(pendingPatient)
+              setPendingPatient(null)
+              setGeneratedSampleId(null)
+            }}
+          >
+            {language === "en" ? "Continue" : "जारी रखें"}
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -299,6 +538,11 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
 
       {/* Main Content */}
       <main className="flex-1 p-4 pb-24">
+        {formError && (
+          <div className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {formError}
+          </div>
+        )}
         {/* Step 1: Identity */}
         {step === 1 && (
           <Card>
@@ -352,9 +596,15 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                   id="phone"
                   type="tel"
                   value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      phone: e.target.value.replace(/\D/g, "").slice(0, 10),
+                    })
+                  }
                   className="h-11"
-                  placeholder="+91 98765 43210"
+                  placeholder="9876543210"
+                  maxLength={10}
                 />
               </div>
 
@@ -427,6 +677,46 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                   className="h-11"
                   placeholder="e.g., 165"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="heartRate">{t.heartRate} <span className="text-muted-foreground text-sm">({t.optional})</span></Label>
+                  <Input
+                    id="heartRate"
+                    type="number"
+                    value={formData.heartRate}
+                    onChange={(e) => setFormData({ ...formData, heartRate: e.target.value })}
+                    className="h-11"
+                    placeholder="e.g., 88"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bodyTemperature">{t.bodyTemperature} <span className="text-muted-foreground text-sm">({t.optional})</span></Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="bodyTemperature"
+                      type="number"
+                      value={formData.bodyTemperature}
+                      onChange={(e) => setFormData({ ...formData, bodyTemperature: e.target.value })}
+                      className="h-11"
+                      placeholder={formData.bodyTemperatureUnit === "C" ? "e.g., 37.2" : "e.g., 99.0"}
+                    />
+                    <select
+                      className="h-11 w-20 rounded-md border px-2 text-sm bg-background"
+                      value={formData.bodyTemperatureUnit}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          bodyTemperatureUnit: e.target.value === "F" ? "F" : "C",
+                        })
+                      }
+                    >
+                      <option value="C">C</option>
+                      <option value="F">F</option>
+                    </select>
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -534,6 +824,63 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
               </CardContent>
             </Card>
 
+            {/* Critical Predictors */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t.criticalPredictors}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">{t.nightSweats}</Label>
+                  <RadioGroup
+                    value={formData.nightSweats}
+                    onValueChange={(value) => setFormData({ ...formData, nightSweats: value as RiskFactorAnswer })}
+                    className="flex flex-wrap gap-2"
+                  >
+                    {answerOptions.map((option) => (
+                      <div key={option.value} className="flex items-center">
+                        <RadioGroupItem value={option.value} id={`nightSweats-${option.value}`} className="peer sr-only" />
+                        <Label
+                          htmlFor={`nightSweats-${option.value}`}
+                          className={`px-3 py-1.5 rounded-md border cursor-pointer text-sm transition-colors ${
+                            formData.nightSweats === option.value
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background border-input hover:bg-muted"
+                          }`}
+                        >
+                          {option.label}
+                        </Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">{t.weightLoss}</Label>
+                  <RadioGroup
+                    value={formData.weightLoss}
+                    onValueChange={(value) => setFormData({ ...formData, weightLoss: value as RiskFactorAnswer })}
+                    className="flex flex-wrap gap-2"
+                  >
+                    {answerOptions.map((option) => (
+                      <div key={option.value} className="flex items-center">
+                        <RadioGroupItem value={option.value} id={`weightLoss-${option.value}`} className="peer sr-only" />
+                        <Label
+                          htmlFor={`weightLoss-${option.value}`}
+                          className={`px-3 py-1.5 rounded-md border cursor-pointer text-sm transition-colors ${
+                            formData.weightLoss === option.value
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background border-input hover:bg-muted"
+                          }`}
+                        >
+                          {option.label}
+                        </Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                </div>
+              </CardContent>
+            </Card>
+
             {/* Physical Signs */}
             <Card>
               <CardHeader className="pb-2">
@@ -589,12 +936,7 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
                       onValueChange={(value) => updateRiskFactor(factor.id, value as RiskFactorAnswer)}
                       className="flex flex-wrap gap-2"
                     >
-                      {[
-                        { value: "yes", label: t.yes },
-                        { value: "no", label: t.no },
-                        { value: "dontKnow", label: t.dontKnow },
-                        { value: "preferNotToSay", label: t.preferNotToSay },
-                      ].map((option) => (
+                      {answerOptions.map((option) => (
                         <div key={option.value} className="flex items-center">
                           <RadioGroupItem
                             value={option.value}
@@ -643,19 +985,49 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
               <CardTitle className="text-lg">{t.audioCollection}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {(["slot1", "slot2", "slot3"] as const).map((slot, index) => (
-                <AudioRecordingSlot
-                  key={slot}
-                  slotNumber={index + 1}
-                  status={formData.audioRecordings[slot]}
-                  onRecord={() => simulateRecording(slot)}
-                  onRetry={() => setFormData((prev) => ({
-                    ...prev,
-                    audioRecordings: { ...prev.audioRecordings, [slot]: "idle" },
-                  }))}
-                  t={t}
-                />
-              ))}
+              <div className="rounded-lg border p-4">
+                <p className="text-sm font-medium mb-2">
+                  {language === "en" ? "Record Cough Audio" : "खांसी का ऑडियो रिकॉर्ड करें"}
+                </p>
+                <p className="mb-3 text-xs text-muted-foreground">
+                  {language === "en"
+                    ? "Use microphone to record one clear cough sample (3-10 seconds)."
+                    : "माइक्रोफोन से 3-10 सेकंड का एक साफ खांसी सैंपल रिकॉर्ड करें।"}
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {!isRecording ? (
+                    <Button type="button" onClick={startRecording}>
+                      <Mic className="mr-2 h-4 w-4" />
+                      {language === "en" ? "Start Recording" : "रिकॉर्डिंग शुरू करें"}
+                    </Button>
+                  ) : (
+                    <Button type="button" variant="destructive" onClick={stopRecording}>
+                      <Square className="mr-2 h-4 w-4" />
+                      {language === "en" ? "Stop Recording" : "रिकॉर्डिंग रोकें"}
+                    </Button>
+                  )}
+                  {isRecording && (
+                    <span className="text-sm text-red-600">
+                      {language === "en" ? "Recording" : "रिकॉर्डिंग"}: {recordingSeconds}s
+                    </span>
+                  )}
+                </div>
+                {recordingError && (
+                  <div className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {recordingError}
+                  </div>
+                )}
+                {uploadedAudioName && (
+                  <div className="mt-3 rounded-md bg-muted p-3">
+                    <div className="text-xs text-muted-foreground">
+                      {language === "en" ? "Selected file" : "चयनित फ़ाइल"}: {uploadedAudioName}
+                    </div>
+                    {uploadedAudioPreview && (
+                      <audio controls className="mt-2 w-full" src={uploadedAudioPreview} />
+                    )}
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
         )}
@@ -702,134 +1074,4 @@ export function ScreeningFlow({ ashaId, isOnline, onComplete, onBack, gpsLocatio
       </div>
     </div>
   )
-}
-
-interface AudioRecordingSlotProps {
-  slotNumber: number
-  status: "idle" | "recording" | "tooShort" | "good"
-  onRecord: () => void
-  onRetry: () => void
-  t: ReturnType<typeof useLanguage>["t"]
-}
-
-function AudioRecordingSlot({ slotNumber, status, onRecord, onRetry, t }: AudioRecordingSlotProps) {
-  return (
-    <div className="border rounded-lg p-4 bg-muted/30">
-      <div className="flex items-center justify-between mb-3">
-        <span className="font-medium">{t.recordSlot} {slotNumber}</span>
-        {status === "good" && (
-          <span className="flex items-center gap-1 text-sm text-emerald-600 font-medium">
-            <Check className="h-4 w-4" />
-            {t.goodQuality}
-          </span>
-        )}
-        {status === "tooShort" && (
-          <span className="flex items-center gap-1 text-sm text-amber-600 font-medium">
-            <AlertTriangle className="h-4 w-4" />
-            {t.tooShort}
-          </span>
-        )}
-      </div>
-
-      {/* Simulated Waveform */}
-      <div className="h-12 bg-background rounded-md mb-3 flex items-center justify-center overflow-hidden">
-        {status === "idle" && (
-          <div className="flex gap-1">
-            {Array.from({ length: 20 }).map((_, i) => (
-              <div
-                key={i}
-                className="w-1 bg-muted-foreground/30 rounded-full"
-                style={{ height: `${Math.random() * 20 + 10}px` }}
-              />
-            ))}
-          </div>
-        )}
-        {status === "recording" && (
-          <div className="flex gap-1">
-            {Array.from({ length: 20 }).map((_, i) => (
-              <div
-                key={i}
-                className="w-1 bg-primary rounded-full animate-pulse"
-                style={{
-                  height: `${Math.random() * 30 + 10}px`,
-                  animationDelay: `${i * 50}ms`,
-                }}
-              />
-            ))}
-          </div>
-        )}
-        {(status === "good" || status === "tooShort") && (
-          <div className="flex gap-1">
-            {Array.from({ length: 20 }).map((_, i) => (
-              <div
-                key={i}
-                className={`w-1 rounded-full ${status === "good" ? "bg-emerald-500" : "bg-amber-500"}`}
-                style={{ height: `${Math.random() * 25 + 8}px` }}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Action Button */}
-      {status === "idle" && (
-        <Button onClick={onRecord} className="w-full bg-transparent" variant="outline">
-          <Mic className="h-4 w-4 mr-2" />
-          {t.tapToRecord}
-        </Button>
-      )}
-      {status === "recording" && (
-        <Button disabled className="w-full bg-red-500 text-white hover:bg-red-600">
-          <Mic className="h-4 w-4 mr-2 animate-pulse" />
-          {t.recording}
-        </Button>
-      )}
-      {status === "tooShort" && (
-        <Button onClick={onRetry} className="w-full bg-transparent" variant="outline">
-          <MicOff className="h-4 w-4 mr-2" />
-          {t.retry}
-        </Button>
-      )}
-      {status === "good" && (
-        <Button onClick={onRetry} className="w-full" variant="ghost">
-          {t.retry}
-        </Button>
-      )}
-    </div>
-  )
-}
-
-function generateAIReasoning(data: ScreeningData): string {
-  const reasons: string[] = []
-
-  if (data.coughNature === "bloodStained") {
-    reasons.push("Hemoptysis present - significant TB indicator")
-  }
-  if (data.coughDuration >= 4) {
-    reasons.push(`Prolonged cough of ${data.coughDuration}+ weeks`)
-  }
-  if (data.feverHistory === "highGrade") {
-    reasons.push("Night sweats and high-grade fever reported")
-  }
-  if (data.physicalSigns.length > 2) {
-    reasons.push("Multiple constitutional symptoms present")
-  }
-  if (data.riskFactors.includes("historyOfTB")) {
-    reasons.push("Previous TB history increases recurrence risk")
-  }
-  if (data.riskFactors.includes("familyMemberHasTB")) {
-    reasons.push("Household TB contact - high exposure risk")
-  }
-  if (data.riskFactors.includes("historyOfHIV")) {
-    reasons.push("HIV positive - significantly increased TB risk")
-  }
-  if (data.riskFactors.includes("historyOfCovid")) {
-    reasons.push("Post-COVID respiratory symptoms require evaluation")
-  }
-
-  if (reasons.length === 0) {
-    return "Low clinical suspicion based on current symptoms. Monitor and follow up if symptoms persist or worsen."
-  }
-
-  return reasons.join(". ") + ". Recommend further evaluation and TB testing."
 }

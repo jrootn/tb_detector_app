@@ -28,6 +28,7 @@ import {
   Activity,
   AlertTriangle,
   Calendar,
+  CheckCircle2,
   CloudOff,
   LogOut,
   MapPin,
@@ -36,6 +37,7 @@ import {
   Wifi,
   WifiOff,
   CalendarDays,
+  UserCircle2,
 } from "lucide-react"
 import { LanguageSwitcher } from "./language-switcher"
 import { getStats, type Patient, type RiskLevel } from "@/lib/mockData"
@@ -48,25 +50,31 @@ interface GPSLocation {
 
 interface DashboardScreenProps {
   ashaId: string
+  ashaName?: string
   isOnline: boolean
   patients: Patient[]
+  pendingUploads: number
   onLogout: () => void
   onNewScreening: () => void
   onViewPatient: (patient: Patient) => void
   onViewPriority: () => void
+  onOpenProfile: () => void
   gpsLocation: GPSLocation
 }
 
-type FilterType = "all" | "critical" | "needsSync" | "testScheduled"
+type FilterType = "all" | "critical" | "needsSync" | "testScheduled" | "completed"
 
 export function DashboardScreen({
   ashaId,
+  ashaName,
   isOnline,
   patients,
+  pendingUploads,
   onLogout,
   onNewScreening,
   onViewPatient,
   onViewPriority,
+  onOpenProfile,
   gpsLocation,
 }: DashboardScreenProps) {
   const { t, language } = useLanguage()
@@ -74,6 +82,7 @@ export function DashboardScreen({
   const [dateFilter, setDateFilter] = useState<string>("")
   const [showOfflineWarning, setShowOfflineWarning] = useState(false)
   const stats = getStats(patients)
+  const hasPendingSync = pendingUploads > 0
 
   const filteredPatients = useMemo(() => {
     let filtered = patients
@@ -87,7 +96,12 @@ export function DashboardScreen({
         filtered = filtered.filter((patient) => patient.needsSync)
         break
       case "testScheduled":
-        filtered = filtered.filter((patient) => patient.testScheduled)
+        filtered = filtered.filter((patient) => patient.testScheduled || Boolean(patient.scheduledTestDate))
+        break
+      case "completed":
+        filtered = filtered.filter(
+          (patient) => patient.status === "cleared" || patient.status === "underTreatment"
+        )
         break
     }
 
@@ -174,6 +188,14 @@ export function DashboardScreen({
             )}
           </div>
           <Button 
+            variant="ghost"
+            size="icon"
+            onClick={onOpenProfile}
+          >
+            <UserCircle2 className="h-5 w-5" />
+            <span className="sr-only">Profile</span>
+          </Button>
+          <Button 
             variant="ghost" 
             size="icon" 
             onClick={handleLogoutClick}
@@ -198,7 +220,9 @@ export function DashboardScreen({
       <div className="bg-primary text-primary-foreground px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <p className="text-sm opacity-90">{t.welcome}, {ashaId}</p>
+            <p className="text-sm opacity-90">
+              {t.welcome}, {ashaName || ashaId || (language === "en" ? "ASHA Worker" : "आशा कार्यकर्ता")}
+            </p>
             <p className="flex items-center gap-1.5 text-xs opacity-75">
               <MapPin className="h-3.5 w-3.5" />
               {gpsLocation.latitude && gpsLocation.longitude
@@ -225,7 +249,7 @@ export function DashboardScreen({
       {/* Main Content */}
       <main className="flex-1 p-4 pb-24 space-y-4">
         {/* Stats Cards */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Card
             className="cursor-pointer hover:shadow-md transition-shadow border-l-4 border-l-red-500"
             onClick={onViewPriority}
@@ -241,19 +265,39 @@ export function DashboardScreen({
             </CardContent>
           </Card>
 
-          <Card className="border-l-4 border-l-amber-500">
-            <CardHeader className="p-3 pb-1">
-              <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-                <RefreshCw className="h-3.5 w-3.5 text-amber-500" />
-                {t.pendingUploads}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-3 pt-0">
-              <p className="text-2xl font-bold text-amber-600">{stats.pendingUploads}</p>
-            </CardContent>
-          </Card>
+          {(!isOnline || hasPendingSync) ? (
+            <Card
+              className="border-l-4 border-l-amber-500 cursor-pointer"
+              onClick={() => setFilter("needsSync")}
+            >
+              <CardHeader className="p-3 pb-1">
+                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                  <RefreshCw className="h-3.5 w-3.5 text-amber-500" />
+                  {t.pendingUploads}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3 pt-0">
+                <p className="text-2xl font-bold text-amber-600">{pendingUploads}</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="border-l-4 border-l-emerald-500">
+              <CardHeader className="p-3 pb-1">
+                <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                  {language === "en" ? "All Synced" : "सभी सिंक हो चुके हैं"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-3 pt-0">
+                <p className="text-2xl font-bold text-emerald-600">0</p>
+              </CardContent>
+            </Card>
+          )}
 
-          <Card className="border-l-4 border-l-sky-500">
+          <Card
+            className="border-l-4 border-l-sky-500 cursor-pointer"
+            onClick={() => setFilter("testScheduled")}
+          >
             <CardHeader className="p-3 pb-1">
               <CardTitle className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
                 <Calendar className="h-3.5 w-3.5 text-sky-500" />
@@ -277,8 +321,11 @@ export function DashboardScreen({
                 {[
                   { key: "all" as FilterType, label: t.all },
                   { key: "critical" as FilterType, label: t.criticalRisk },
-                  { key: "needsSync" as FilterType, label: t.needsSync },
+                  ...((!isOnline || hasPendingSync)
+                    ? [{ key: "needsSync" as FilterType, label: t.needsSync }]
+                    : []),
                   { key: "testScheduled" as FilterType, label: t.testScheduled },
+                  { key: "completed" as FilterType, label: language === "en" ? "Completed" : "पूर्ण" },
                 ].map((item) => (
                   <Button
                     key={item.key}
@@ -293,7 +340,7 @@ export function DashboardScreen({
               </div>
               
               {/* Date Filter */}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <CalendarDays className="h-4 w-4 text-muted-foreground" />
                 <Label htmlFor="dateFilter" className="text-sm font-medium whitespace-nowrap">
                   {t.filterByDate}:
@@ -303,7 +350,7 @@ export function DashboardScreen({
                   type="date"
                   value={dateFilter}
                   onChange={(e) => setDateFilter(e.target.value)}
-                  className="h-8 w-auto text-sm"
+                  className="h-8 w-full text-sm sm:w-auto"
                 />
                 {dateFilter && (
                   <Button
@@ -319,11 +366,40 @@ export function DashboardScreen({
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
+            <div className="space-y-2 p-3 md:hidden">
+              {filteredPatients.map((patient) => (
+                <button
+                  key={patient.id}
+                  type="button"
+                  className="w-full rounded-lg border bg-background p-3 text-left shadow-sm transition-colors hover:bg-muted/40"
+                  onClick={() => onViewPatient(patient)}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-medium">{language === "en" ? patient.name : patient.nameHi}</div>
+                      <div className="text-xs text-muted-foreground">{patient.sampleId || "-"}</div>
+                    </div>
+                    <Badge className={getRiskBadgeStyle(patient.riskLevel)}>{getRiskLabel(patient.riskLevel)}</Badge>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                    <div>{language === "en" ? patient.village : patient.villageHi}</div>
+                    <div className="text-right">{new Date(patient.collectionDate).toLocaleDateString(language === "en" ? "en-IN" : "hi-IN")}</div>
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">{getStatusLabel(patient.status)}</div>
+                </button>
+              ))}
+              {filteredPatients.length === 0 && (
+                <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  {language === "en" ? "No patients found" : "कोई मरीज़ नहीं मिला"}
+                </div>
+              )}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="font-semibold">{t.name}</TableHead>
+                    <TableHead className="font-semibold">Sample ID</TableHead>
                     <TableHead className="font-semibold">{t.village}</TableHead>
                     <TableHead className="font-semibold">{t.collectionDate}</TableHead>
                     <TableHead className="font-semibold">{t.riskScore}</TableHead>
@@ -339,6 +415,9 @@ export function DashboardScreen({
                     >
                       <TableCell className="font-medium">
                         {language === "en" ? patient.name : patient.nameHi}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {patient.sampleId || "-"}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {language === "en" ? patient.village : patient.villageHi}
@@ -360,7 +439,7 @@ export function DashboardScreen({
                   ))}
                   {filteredPatients.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                         {language === "en" ? "No patients found" : "कोई मरीज़ नहीं मिला"}
                       </TableCell>
                     </TableRow>

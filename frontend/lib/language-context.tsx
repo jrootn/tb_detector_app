@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 
 type Language = "en" | "hi"
 
@@ -76,6 +76,8 @@ interface Translations {
   // Vitals
   weight: string
   height: string
+  heartRate: string
+  bodyTemperature: string
   
   // Clinical Questionnaire
   coughDuration: string
@@ -90,6 +92,9 @@ interface Translations {
   none: string
   lowGrade: string
   highGradeNightSweats: string
+  criticalPredictors: string
+  nightSweats: string
+  weightLoss: string
   physicalSigns: string
   chestPain: string
   shortnessOfBreath: string
@@ -128,6 +133,20 @@ interface Translations {
   isolateFromChildren: string
   wearMask: string
   ventilateRoom: string
+
+  // Workflow status
+  collected: string
+  synced: string
+  aiAnalysisDone: string
+  doctorReviewed: string
+  testScheduledLabel: string
+  testCompleted: string
+  collectedHelp: string
+  syncedHelp: string
+  aiAnalysisDoneHelp: string
+  doctorReviewedHelp: string
+  testScheduledHelp: string
+  testCompletedHelp: string
   
   // Status
   awaitingDoctor: string
@@ -149,7 +168,7 @@ interface Translations {
 
 const translations: Record<Language, Translations> = {
   en: {
-    appName: "TB-Triage AI",
+    appName: "Smart TB Triage",
     login: "Login",
     logout: "Logout",
     dashboard: "Dashboard",
@@ -212,6 +231,8 @@ const translations: Record<Language, Translations> = {
     
     weight: "Weight (kg)",
     height: "Height (cm)",
+    heartRate: "Heart Rate (bpm)",
+    bodyTemperature: "Body Temperature (°C)",
     
     coughDuration: "Cough Duration",
     weeks: "weeks",
@@ -225,6 +246,9 @@ const translations: Record<Language, Translations> = {
     none: "None",
     lowGrade: "Low Grade",
     highGradeNightSweats: "High Grade (Night Sweats)",
+    criticalPredictors: "Critical Predictors",
+    nightSweats: "Night Sweats",
+    weightLoss: "Unintentional Weight Loss",
     physicalSigns: "Physical Signs",
     chestPain: "Chest Pain",
     shortnessOfBreath: "Shortness of Breath",
@@ -261,6 +285,19 @@ const translations: Record<Language, Translations> = {
     isolateFromChildren: "Isolate from children",
     wearMask: "Wear mask at all times",
     ventilateRoom: "Keep room well ventilated",
+
+    collected: "Collected",
+    synced: "Synced",
+    aiAnalysisDone: "AI Analysis",
+    doctorReviewed: "Doctor Review",
+    testScheduledLabel: "Test Scheduled",
+    testCompleted: "Test Done",
+    collectedHelp: "Patient form and sample were collected on device.",
+    syncedHelp: "Record and media were synced to cloud.",
+    aiAnalysisDoneHelp: "AI processing completed and risk summary is ready.",
+    doctorReviewedHelp: "Doctor reviewed case and added decision/notes.",
+    testScheduledHelp: "Diagnostic test date or lab assignment exists.",
+    testCompletedHelp: "Lab/testing workflow has been completed.",
     
     awaitingDoctor: "Awaiting Doctor",
     testPending: "Test Pending",
@@ -277,7 +314,7 @@ const translations: Record<Language, Translations> = {
     village: "Village",
   },
   hi: {
-    appName: "टीबी-ट्राइएज एआई",
+    appName: "स्मार्ट टीबी ट्राइएज",
     login: "लॉगिन",
     logout: "लॉगआउट",
     dashboard: "डैशबोर्ड",
@@ -340,6 +377,8 @@ const translations: Record<Language, Translations> = {
     
     weight: "वजन (किग्रा)",
     height: "ऊंचाई (सेमी)",
+    heartRate: "हृदय गति (bpm)",
+    bodyTemperature: "शरीर का तापमान (°C)",
     
     coughDuration: "खांसी की अवधि",
     weeks: "सप्ताह",
@@ -353,6 +392,9 @@ const translations: Record<Language, Translations> = {
     none: "कोई नहीं",
     lowGrade: "हल्का",
     highGradeNightSweats: "तेज (रात को पसीना)",
+    criticalPredictors: "महत्वपूर्ण संकेतक",
+    nightSweats: "रात को पसीना",
+    weightLoss: "अनचाहा वजन कम होना",
     physicalSigns: "शारीरिक लक्षण",
     chestPain: "सीने में दर्द",
     shortnessOfBreath: "सांस की तकलीफ",
@@ -389,6 +431,19 @@ const translations: Record<Language, Translations> = {
     isolateFromChildren: "बच्चों से दूर रखें",
     wearMask: "हमेशा मास्क पहनें",
     ventilateRoom: "कमरे में हवा आने दें",
+
+    collected: "संग्रहित",
+    synced: "सिंक हो गया",
+    aiAnalysisDone: "एआई विश्लेषण",
+    doctorReviewed: "डॉक्टर समीक्षा",
+    testScheduledLabel: "टेस्ट निर्धारित",
+    testCompleted: "टेस्ट पूरा",
+    collectedHelp: "मरीज का फॉर्म और सैंपल डिवाइस पर संग्रहित हो गया है।",
+    syncedHelp: "रिकॉर्ड और मीडिया क्लाउड पर सिंक हो गए हैं।",
+    aiAnalysisDoneHelp: "एआई प्रोसेसिंग पूरी हो गई और जोखिम सारांश तैयार है।",
+    doctorReviewedHelp: "डॉक्टर ने केस देखकर निर्णय/नोट्स जोड़े हैं।",
+    testScheduledHelp: "टेस्ट की तारीख या लैब असाइनमेंट सेट है।",
+    testCompletedHelp: "लैब/टेस्टिंग प्रक्रिया पूरी हो चुकी है।",
     
     awaitingDoctor: "डॉक्टर की प्रतीक्षा",
     testPending: "परीक्षण लंबित",
@@ -416,15 +471,32 @@ const LanguageContext = createContext<LanguageContextType | undefined>(undefined
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguage] = useState<Language>("en")
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const explicit = localStorage.getItem("app_language")
+    const preferred = localStorage.getItem("user_preferred_language")
+    const next = explicit || preferred
+    if (next === "en" || next === "hi") {
+      setLanguage(next)
+    }
+  }, [])
+
+  const value = useMemo(
+    () => ({
+      language,
+      setLanguage: (lang: Language) => {
+        setLanguage(lang)
+        if (typeof window !== "undefined") {
+          localStorage.setItem("app_language", lang)
+        }
+      },
+      t: translations[language],
+    }),
+    [language]
+  )
 
   return (
-    <LanguageContext.Provider
-      value={{
-        language,
-        setLanguage,
-        t: translations[language],
-      }}
-    >
+    <LanguageContext.Provider value={value}>
       {children}
     </LanguageContext.Provider>
   )

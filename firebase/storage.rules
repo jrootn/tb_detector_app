@@ -1,0 +1,118 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserPath() {
+      return /databases/(default)/documents/users/$(request.auth.uid);
+    }
+
+    function hasCurrentUserDoc() {
+      return signedIn() && firestore.exists(currentUserPath());
+    }
+
+    function currentUserData() {
+      return firestore.get(currentUserPath()).data;
+    }
+
+    // Keep cross-service reads to the minimum in each allow expression.
+    function role() {
+      let u = hasCurrentUserDoc() ? currentUserData() : null;
+      return (u != null && ("role" in u)) ? u.role : "";
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches("image/.*");
+    }
+
+    function isAudio() {
+      return request.resource.contentType.matches("audio/.*");
+    }
+
+    function isPdf() {
+      return request.resource.contentType == "application/pdf";
+    }
+
+    function under(bytes) {
+      return request.resource.size < bytes;
+    }
+
+    function canReadAshaUpload(uid) {
+      let r = role();
+      return r == "ADMIN" || r == "DOCTOR" || r == "LAB_TECH" || (r == "ASHA" && request.auth.uid == uid);
+    }
+
+    function canCreateAshaUpload(uid) {
+      let r = role();
+      return r == "ASHA"
+        && request.auth.uid == uid
+        && (isImage() || isAudio())
+        && under(10 * 1024 * 1024);
+    }
+
+    function canReadLabResult(uid) {
+      let r = role();
+      return r == "ADMIN" || r == "DOCTOR" || r == "LAB_TECH";
+    }
+
+    function canCreateLabResult(uid) {
+      let r = role();
+      return r == "LAB_TECH"
+        && request.auth.uid == uid
+        && (isPdf() || isImage())
+        && under(15 * 1024 * 1024);
+    }
+
+    function canReadDoctorUpload() {
+      let r = role();
+      return r == "ADMIN" || r == "DOCTOR";
+    }
+
+    function canCreateDoctorUpload(uid) {
+      let r = role();
+      return r == "DOCTOR"
+        && request.auth.uid == uid
+        && (isPdf() || isImage() || isAudio())
+        && under(25 * 1024 * 1024);
+    }
+
+    function canCreateDoctorUploadLegacy() {
+      let r = role();
+      return r == "DOCTOR"
+        && (isPdf() || isImage() || isAudio())
+        && under(25 * 1024 * 1024);
+    }
+
+    match /asha_uploads/{uid}/{patientId}/{file} {
+      allow read: if canReadAshaUpload(uid);
+      allow create: if canCreateAshaUpload(uid);
+      allow update, delete: if false;
+    }
+
+    match /lab_results/{uid}/{patientId}/{file} {
+      allow read: if canReadLabResult(uid);
+      allow create: if canCreateLabResult(uid);
+      allow update, delete: if false;
+    }
+
+    // Current path pattern from frontend
+    match /doctor_uploads/{uid}/{patientId}/{file} {
+      allow read: if canReadDoctorUpload();
+      allow create: if canCreateDoctorUpload(uid);
+      allow update, delete: if false;
+    }
+
+    // Legacy fallback path still used by sync fallback
+    match /doctor_uploads/{patientId}/{file} {
+      allow read: if canReadDoctorUpload();
+      allow create: if canCreateDoctorUploadLegacy();
+      allow update, delete: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

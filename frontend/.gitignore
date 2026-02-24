@@ -28,6 +28,12 @@ build/
 .env.*
 !.env.example
 
+# Python (if any local tools)
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
 # OS/editor
 .DS_Store
 .vscode/

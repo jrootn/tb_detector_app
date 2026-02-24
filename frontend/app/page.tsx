@@ -1,5 +1,5 @@
-import { AppShell } from "@/components/app-shell"
+import { RoleRouter } from "@/components/role-router"
 
 export default function Page() {
-  return <AppShell />
+  return <RoleRouter />
 }
