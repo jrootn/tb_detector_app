@@ -19,6 +19,10 @@ Password for all accounts: `password123`
 
 Use `/login` and sign in with one account at a time.
 
+## Demo Data Disclosure
+- Dashboard and walkthrough data in this competition deployment is **synthetic/demo data** for product evaluation.
+- It is **not real patient clinical data** and should not be interpreted as real-world medical records.
+
 ---
 
 <details open>
@@ -51,6 +55,7 @@ Use `/login` and sign in with one account at a time.
 
 ### Optional validation checks (for judges)
 - Confirm AI bilingual summary fields exist: `ai.medgemini_summary_en`, `ai.medgemini_summary_hi`.
+- Confirm rule-based action fields exist: `ai.action_items_en`, `ai.action_items_hi`.
 - Confirm workflow status progression and role-based visibility.
 - Confirm no non-AI fields are overwritten by inference.
 
@@ -88,7 +93,8 @@ This project solves those constraints by:
 - HEAR acoustic embedding extraction from cough audio.
 - Classical risk models for acoustic + clinical risk.
 - Calibrated supervisor model for final TB risk probability.
-- MedGemma-based bilingual explanation generation (English + Hindi).
+- MedGemma-based bilingual explanation generation (English + Hindi summaries).
+- Deterministic rule-based action generation (English + Hindi action items) derived from validated risk + symptom signals.
 
 ### Clinical Data Safety by Design
 - Inference writes back only `ai.*` fields.
@@ -143,7 +149,7 @@ flowchart LR
   - clinical probability,
   - then calibrated stacked risk probability (`risk_score`).
 
-### 4.2 MedGemma Clinical Justification
+### 4.2 MedGemma Clinical Justification (Summaries)
 - Prompted for concise 2-sentence outputs.
 - Output post-processing removes chain-of-thought artifacts.
 - Hindi response must contain Devanagari; fallback templates are applied if needed.
@@ -152,7 +158,16 @@ flowchart LR
   - `ai.medgemini_summary_hi`
   - `ai.medgemini_summary_i18n = { en, hi }`
 
-### 4.3 Determinism + Idempotency
+### 4.3 Action Recommendations (Rule-Based)
+- Actions are **not** free-form LLM output.
+- A deterministic clinical ruleset maps risk tier + red-flag symptoms into operational next steps.
+- Bilingual outputs are stored in:
+  - `ai.action_items_en`
+  - `ai.action_items_hi`
+  - `ai.action_items_i18n = { en, hi }`
+- This improves consistency, auditability, and safety for triage operations.
+
+### 4.4 Determinism + Idempotency
 - Function guard skip reasons include:
   - `no_audio`
   - `not_ready`
@@ -172,6 +187,9 @@ Inference service returns/stores:
 - `ai.medgemini_summary_en`
 - `ai.medgemini_summary_hi`
 - `ai.medgemini_summary_i18n`
+- `ai.action_items_en`
+- `ai.action_items_hi`
+- `ai.action_items_i18n`
 - `ai.generated_at`
 - `ai.model_version`
 - `ai.inference_status`
@@ -402,4 +420,5 @@ This submission is intentionally built around production constraints:
 - deterministic and secure cloud orchestration,
 - and India-aligned operational workflow semantics.
 
-No dummy AI summaries/actions are used in the current pipeline.
+No dummy AI summaries are used in the current pipeline.
+Action recommendations are deterministic rule-based outputs generated from model risk and clinical signals (not free-form AI text).
