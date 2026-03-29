@@ -1,426 +1,150 @@
-# MedGemma TB Triage Platform
+# MedGemma TB Triage
+## Privacy-first, offline-first tuberculosis screening and triage for rural first-mile care workflows
 
-AI-assisted TB screening and triage for ASHA-centered field workflows, with real-model inference, offline-first operation, and role-based care coordination across ASHA, Doctor, Lab, and Admin (Control Tower).
+MedGemma TB Triage is an end-to-end prototype for AI-assisted tuberculosis screening and triage designed around the realities of low-connectivity public health settings.
 
-## Live Demo
-- Frontend (public): `https://tb-frontend-7z7c3myqlq-uk.a.run.app`
-- Backend inference service: private Cloud Run (`tb-inference`) invoked through Cloud Tasks + OIDC.
+It was built to explore a very specific healthcare systems problem: in many rural TB workflows, the biggest failure is not lack of awareness, and not even lack of diagnostic tools. The real failure often happens in the gap between first-mile screening and timely testing. Field workers may identify symptomatic patients, but internet access is unreliable, lab throughput is limited, queues are often first-come-first-served, and higher-risk patients do not always move through the system quickly enough.
 
-## Reviewer Accounts (Competition Demo)
-Use these accounts for role-based evaluation.  
-Password for all accounts: `password123`
+This project proposes a different workflow. Instead of treating screening as an isolated form-entry task, it treats triage as an operational pipeline:
 
-| Role | Email | Purpose |
-|---|---|---|
-| ASHA | `sunita.asha@indiatb.gov` | Field screening + offline collection |
-| Doctor | `aditi.doctor@indiatb.gov` | Clinical review + queue prioritization |
-| Lab | `rohan.lab@indiatb.gov` | Lab queue, sample processing order, report upload |
-| Admin (Control Tower) | `suresh.sts@indiatb.gov` | District/TU monitoring, operations, analytics |
+- **ASHA workers collect data offline in the field**
+- **cough audio and symptom metadata are synced when connectivity returns**
+- **a private-cloud ML pipeline computes a calibrated TB triage risk score**
+- **MedGemma generates concise clinician-facing summaries**
+- **labs and doctors receive a ranked queue rather than an unprioritized stream**
+- **admins get a control-tower view of workload, sync health, and bottlenecks**
 
-Use `/login` and sign in with one account at a time.
-
-## Demo Data Disclosure
-- Dashboard and walkthrough data in this competition deployment is **synthetic/demo data** for product evaluation.
-- It is **not real patient clinical data** and should not be interpreted as real-world medical records.
+The result is a full-stack, role-based system built around real deployment constraints rather than a benchmark-only AI demo.
 
 ---
 
-<details open>
-<summary><strong>0) Judge Walkthrough (5-8 Minutes)</strong></summary>
+## Table of Contents
 
-### What judges should know first
-- This is an offline-first TB triage stack: ASHA can collect data offline, backend inference runs asynchronously, and dashboards update from Firestore.
-- Real AI outputs are written under `ai.*` fields only.
-- First inference after idle can be slower (cold start + heavy model load); subsequent requests are faster.
+- [Why this project exists](#why-this-project-exists)
+- [The problem](#the-problem)
+- [The core idea](#the-core-idea)
+- [What the platform does](#what-the-platform-does)
+- [Screenshots](#screenshots)
+- [System walkthrough](#system-walkthrough)
+- [Architecture overview](#architecture-overview)
+- [Machine learning and AI pipeline](#machine-learning-and-ai-pipeline)
+- [Why MedGemma was used](#why-medgemma-was-used)
+- [Why HeAR mattered](#why-hear-mattered)
+- [Model performance](#model-performance)
+- [Data flow and backend orchestration](#data-flow-and-backend-orchestration)
+- [Offline-first behavior](#offline-first-behavior)
+- [Role-based product design](#role-based-product-design)
+- [Data safety and privacy posture](#data-safety-and-privacy-posture)
+- [Repository structure](#repository-structure)
+- [Research and training artifacts](#research-and-training-artifacts)
+- [Why this is more than a hackathon demo](#why-this-is-more-than-a-hackathon-demo)
+- [Limitations](#limitations)
+- [Future work](#future-work)
+- [Competition context](#competition-context)
+- [Author](#author)
 
-### Simple real-world workflow (India context)
-- Internet is often unreliable in the field, so ASHA workers collect data/audio offline first.
-- Many patients delay testing because going to labs means long waits and loss of daily wages.
-- Lab capacity is limited, so "first-come-first-served" is unsafe for TB triage.
-- This system ranks risk so higher-priority cases move earlier in lab workflow.
-- Doctor review is selective and targeted: not every case needs manual doctor intervention before lab actions.
-- Admin/STS view tracks queue pressure and facility-level bottlenecks.
+---
 
-### Quick demo sequence
-1. Open the live app: `https://tb-frontend-7z7c3myqlq-uk.a.run.app`
-2. Login as ASHA: `sunita.asha@indiatb.gov` / `password123`
-3. Create one screening (or open existing high-risk patients in ASHA dashboard).
-4. Wait for backend processing (typically seconds to a few minutes; cold start can be longer).
-5. Live demo note: inference backend is configured with `min instances = 0`, so the first AI prediction after idle can take ~15-20 minutes in worst case.
-6. Logout and login as Lab: `rohan.lab@indiatb.gov` / `password123`
-7. Show lab queue ordering by urgency/risk and upload a lab report for one case.
-8. Logout and login as Doctor: `aditi.doctor@indiatb.gov` / `password123`
-9. Show ranked queue, risk score, and AI summary on doctor side.
-10. Logout and login as Admin: `suresh.sts@indiatb.gov` / `password123`
-11. Show Control Tower analytics, risk distribution, and facility-level operations.
+## Why this project exists
 
-### Optional validation checks (for judges)
-- Confirm AI bilingual summary fields exist: `ai.medgemini_summary_en`, `ai.medgemini_summary_hi`.
-- Confirm rule-based action fields exist: `ai.action_items_en`, `ai.action_items_hi`.
-- Confirm workflow status progression and role-based visibility.
-- Confirm no non-AI fields are overwritten by inference.
+India carries a very large share of the global tuberculosis burden, and frontline case finding often depends on ASHA workers operating in difficult conditions: limited infrastructure, patchy connectivity, constrained device quality, and communities where time spent traveling for care can directly translate into lost daily wages.
 
-### Role switch tip
-- Use one role at a time in the same browser session.
-- If role routing appears cached, logout and sign in again (or open a private window for each role).
+That changes the nature of the product problem.
 
-</details>
+A lot of AI healthcare prototypes focus only on prediction quality. But in rural TB screening, the central problem is often not just “can a model score risk?” It is “can a system fit into the actual workflow of field collection, sample movement, queue management, doctor review, and public health operations?”
 
-<details open>
-<summary><strong>1) Problem Statement</strong></summary>
+That is what this project was built to explore.
 
-Rural TB case finding faces operational gaps:
-- Symptom capture is done in low-connectivity settings.
-- Risk ranking is inconsistent and often manual.
-- Lab infrastructure is constrained, so first-come-first-served queues can delay high-risk patients.
-- Many workers and patients lose daily wages if they spend long hours traveling/waiting for tests.
-- Clinical handoff across ASHA -> Lab -> Doctor is fragmented.
-- AI proof-of-concept systems fail when they overwrite clinical records, use dummy outputs, or break under poor network conditions.
+---
 
-This project solves those constraints by:
-- keeping ASHA workflows offline-first,
-- using deterministic event-driven backend inference,
-- routing actionable high-risk cases into prioritized lab workflow,
-- enabling targeted doctor intervention where needed instead of forcing doctor approval for every case,
-- writing only `ai.*` outputs to preserve clinical data integrity,
-- and presenting actionable ranked queues for Doctor and Lab roles.
+## The problem
 
-</details>
+Many TB workflows still break down in the handoff between community screening and downstream clinical action.
 
-<details open>
-<summary><strong>2) What Makes This Submission Strong</strong></summary>
+Common failure points include:
 
-### Real AI Pipeline (not mock)
-- HEAR acoustic embedding extraction from cough audio.
-- Classical risk models for acoustic + clinical risk.
-- Calibrated supervisor model for final TB risk probability.
-- MedGemma-based bilingual explanation generation (English + Hindi summaries).
-- Deterministic rule-based action generation (English + Hindi action items) derived from validated risk + symptom signals.
+- data is captured in locations with poor or no internet access
+- symptomatic patients may delay testing because travel and waiting time cost income
+- labs often work through queues with limited capacity
+- first-come-first-served processing can delay higher-risk patients
+- clinical context gets fragmented across field worker, lab, and doctor roles
+- AI prototypes often fail deployment reality because they assume constant connectivity, ignore privacy constraints, or provide outputs that are hard to audit
 
-### Clinical Data Safety by Design
-- Inference writes back only `ai.*` fields.
-- No overwrite of demographics, symptoms, vitals, audio metadata, status, or assignment fields.
+In other words, the problem is not only medical classification. It is coordination.
 
-### Offline-First Field UX
-- ASHA app stores patients and pending uploads locally (Dexie/IndexedDB).
-- Sync retries when network returns.
-- Foreground periodic sync keeps AI status/risk updated for ASHA view.
+---
 
-### Production Cloud Pattern
-- Firestore trigger -> Cloud Tasks (idempotent task naming) -> private Cloud Run inference endpoint (OIDC).
-- Retries, dedupe, and skip-reason logic prevent duplicate expensive inference calls.
+## The core idea
 
-</details>
+This project is based on a simple but powerful workflow idea.
 
-<details open>
-<summary><strong>3) End-to-End Architecture</strong></summary>
+If sputum can be collected and transported safely under practical field conditions, then a patient does not necessarily need to enter the testing process only by physically waiting in a walk-in queue. A field worker can screen multiple households, collect relevant information and samples, and feed a structured, risk-aware queue into the system when connectivity returns.
 
-```mermaid
-flowchart LR
-    A[ASHA App\nOffline-first] -->|sync| F[(Firestore patients)]
-    A -->|audio upload| S[(Firebase Storage)]
-    F -->|on write| T[Firebase Function v2\nonPatientWriteEnqueueInference]
-    T --> Q[Cloud Tasks queue]
-    Q -->|OIDC POST /internal/infer| R[Cloud Run tb-inference\nprivate]
-    R -->|read patient + audio| F
-    R -->|read blobs| S
-    R -->|write ai.* only| F
-    D[Doctor UI] --> F
-    L[Lab UI] --> F
-    C[Admin Control Tower] --> F
-```
+That transforms the operational logic from this:
 
-### Core Backend Flow
-1. Firestore write on `patients/{patientId}`.
-2. Trigger checks eligibility (`audio exists`, `triage ready`, `not already successful for same model version`).
-3. Eligible records are enqueued to Cloud Tasks with deterministic IDs.
-4. Cloud Task calls private Cloud Run `/internal/infer` with OIDC.
-5. Inference service reads patient + audio, runs real model stack, writes `ai.*`.
+**walk-in arrival -> generic queue -> delayed review**
 
-</details>
+to this:
 
-<details open>
-<summary><strong>4) Advanced Methods (Technical)</strong></summary>
+**field screening -> offline capture -> asynchronous inference -> ranked triage queue -> targeted review**
 
-### 4.1 Acoustic + Clinical Fusion
-- Audio is windowed at 16 kHz and encoded via HEAR serving signature.
-- Aggregation features include `mean/std/p25/p50/p75` of embeddings.
-- Classical experts produce:
-  - acoustic probability (`hear_score` path),
-  - clinical probability,
-  - then calibrated stacked risk probability (`risk_score`).
+The project therefore focuses on **prioritization**, **workflow continuity**, and **clinical explainability**, not just raw model scoring.
 
-### 4.2 MedGemma Clinical Justification (Summaries)
-- Prompted for concise 2-sentence outputs.
-- Output post-processing removes chain-of-thought artifacts.
-- Hindi response must contain Devanagari; fallback templates are applied if needed.
-- Both languages are stored:
-  - `ai.medgemini_summary_en`
-  - `ai.medgemini_summary_hi`
-  - `ai.medgemini_summary_i18n = { en, hi }`
+---
 
-### 4.3 Action Recommendations (Rule-Based)
-- Actions are **not** free-form LLM output.
-- A deterministic clinical ruleset maps risk tier + red-flag symptoms into operational next steps.
-- Bilingual outputs are stored in:
-  - `ai.action_items_en`
-  - `ai.action_items_hi`
-  - `ai.action_items_i18n = { en, hi }`
-- This improves consistency, auditability, and safety for triage operations.
+## What the platform does
 
-### 4.4 Determinism + Idempotency
-- Function guard skip reasons include:
-  - `no_audio`
-  - `not_ready`
-  - `already_succeeded_same_version`
-  - `ai_only_update`
-- Task IDs include patient + target model version + source write token to avoid collisions.
+MedGemma TB Triage models the workflow through four user roles.
 
-</details>
+### 1. ASHA worker
+The ASHA-facing interface is built for first-mile screening in the field.
 
-<details open>
-<summary><strong>5) Data Contract and Firestore Safety</strong></summary>
+An ASHA worker can:
+- register patients
+- record cough audio
+- enter structured symptom metadata
+- continue working without internet
+- sync records later when connectivity returns
 
-Inference service returns/stores:
-- `ai.hear_score`
-- `ai.risk_score`
-- `ai.risk_level`
-- `ai.medgemini_summary_en`
-- `ai.medgemini_summary_hi`
-- `ai.medgemini_summary_i18n`
-- `ai.action_items_en`
-- `ai.action_items_hi`
-- `ai.action_items_i18n`
-- `ai.generated_at`
-- `ai.model_version`
-- `ai.inference_status`
-- `ai.error_message` (failure only)
+The design goal here is practical usability. The product is meant to fit the field workflow rather than ask the field worker to adapt to a technically impressive but unrealistic system.
 
-### Important Contract Rule
-Only `ai.*` is written by inference.  
-Non-AI fields are preserved (demographics/clinical/audio/status/assignment).
+### 2. Lab technician
+The lab interface receives queued patients and samples in a structured order. Rather than treating everything as a flat incoming stream, the system supports risk-aware prioritization and report upload workflow.
 
-</details>
+### 3. Doctor
+The doctor dashboard presents ranked patients with:
+- calibrated risk score
+- risk tier
+- triage status
+- short AI-generated clinical summary
+- operational action context
+- manual ranking override controls
 
-<details open>
-<summary><strong>6) Offline Mode, Sync, and Resilience</strong></summary>
+The doctor remains in control. This is not an autonomous triage engine. It is a prioritization and explainability layer that helps clinicians review faster and with better context.
 
-### Offline-First Behavior
-- Local DB: Dexie (`patients`, `uploads`).
-- ASHA can continue screening and queue uploads while offline.
-- Sync engine pushes pending records + files when connectivity returns.
+### 4. Admin / control tower
+The admin view provides a higher-level operational dashboard:
+- total users and facilities
+- stale sync monitoring
+- queue pressure
+- missing assignment alerts
+- status distribution
+- high-level throughput visibility
 
-### Multi-Role Live Updates
-- Doctor/Lab/Admin dashboards use Firestore live listeners.
-- ASHA receives periodic sync refresh while online to pull backend AI updates.
+This role-based separation matters because the project is not just a single-screen AI demo. It is a multi-role care coordination prototype.
 
-### Retry and Failure Handling
-- Cloud Tasks handles backend retries.
-- Inference failures are written to `ai.inference_status=FAILED` with `ai.error_message`.
-- `report_inference_status.py` provides operational status snapshots.
+---
 
-</details>
+## Screenshots
 
-<details open>
-<summary><strong>7) Alignment with India Program Reality (NTEP/Nikshay-oriented)</strong></summary>
+Because the live server is being retired, screenshots are important and should absolutely be included in the repository.
 
-This repository models operational entities and flow similar to India TB programs:
-- ASHA-driven first-mile screening and sample collection.
-- PHC-level doctor and lab assignment.
-- TU/PHC hierarchy tagging (`tu_id`, `facility_id`, `facility_name`).
-- `sample_id`, triage statuses, and longitudinal patient event progression.
-
-### Role Mapping
-| Platform Role | Real-world counterpart |
-|---|---|
-| ASHA | Community frontline worker |
-| DOCTOR | PHC/clinical reviewer |
-| LAB_TECH | Diagnostic lab workflow |
-| ADMIN | STS/TU operational command view |
-
-### Integration Readiness Hooks
-- Facility tagging and assignee fields support PHC/TU routing.
-- Stable patient/sample identifiers can be mapped to external reporting systems.
-- AI outputs are additive (`ai.*`), enabling safe downstream interoperability.
-
-### Suggested National-Scale Integration Next Steps
-1. Add export connectors for structured reporting feeds.
-2. Map patient + sample schema to program reporting templates.
-3. Add facility registry synchronization pipeline.
-4. Introduce auditable integration adapters for state/district deployments.
-
-</details>
-
-<details open>
-<summary><strong>8) Data Sovereignty, Privacy, and Governance</strong></summary>
-
-### Controls in this codebase
-- Role-based Firestore access (`firebase/firestore.rules`).
-- Role-based Storage path policies (`firebase/storage.rules`).
-- No client-side delete for core clinical records.
-- Upload scope and MIME/type/size guardrails in rules.
-
-### Sovereignty posture
-- For India production, run in India regions and keep all storage/compute in-country.
-- This competition deployment currently uses `us-east4`; production rollout should switch to India-region infrastructure.
-
-### Security model
-- Private inference service.
-- Cloud Tasks OIDC-authenticated calls.
-- Server-side Firebase token verification for sync API.
-
-</details>
-
-<details open>
-<summary><strong>9) Scalability to Internet-Scale Usage</strong></summary>
-
-Current architecture is horizontally scalable by design:
-- Stateless Cloud Run services.
-- Queue-buffered asynchronous inference.
-- Event-driven fan-out from Firestore writes.
-
-### Scale plan
-1. Increase Cloud Run max instances for inference workers.
-2. Partition Cloud Tasks queues by geography/priority/model-version.
-3. Add autoscaling guardrails by latency + queue depth.
-4. Introduce cached model artifacts and warm pools for lower first-hit latency.
-5. Add regional deployment topology for data-locality and failover.
-
-### Frontend (demo-tuned Cloud Run)
-- `min-instances=1`
-- `max-instances=3`
-- `concurrency=20`
-
-</details>
-
-<details open>
-<summary><strong>10) Cold Start and Latency Disclosure</strong></summary>
-
-Observed from Cloud Run request logs (current deployment):
-- Warm inference requests: typically ~2s to ~10s.
-- One cold/first-load request observed at ~603s (`2026-02-23T22:54:30Z`) due heavy model initialization.
-
-Why this happens:
-- Backend inference in the live demo is configured with `min instances = 0` (scale-to-zero economics).
-- Real HEAR + classical + MedGemma model loading is heavy on first activation.
-- In the worst case after idle, first prediction can take ~15-20 minutes.
-
-Mitigation options:
-1. Set `min instances > 0` on inference service for demo-critical windows.
-2. Pre-warm revisions after deploy.
-3. Cache artifacts locally and keep warm model bundles.
-4. Reduce first-hit work by staged model warm-up.
-
-</details>
-
-<details open>
-<summary><strong>11) Deployment Guide (What Reviewers Need)</strong></summary>
-
-### Backend deploy
-See: `backend/cloud-backend/QUICKSTART_WORKBENCH.md`
-
-### Frontend deploy (Cloud Run)
-```bash
-cd /home/jroot/TB-medgemma
-chmod +x frontend/deploy_cloud_run.sh
-PROJECT_ID=medgemini-tb-triage \
-REGION=us-east4 \
-SERVICE_NAME=tb-frontend \
-AR_REPO=tb-backend \
-NEXT_PUBLIC_API_BASE_URL=/api \
-./frontend/deploy_cloud_run.sh
-```
-
-### Health checks
-```bash
-gcloud run services describe tb-frontend --project medgemini-tb-triage --region us-east4
-gcloud run services describe tb-inference --project medgemini-tb-triage --region us-east4
-```
-
-</details>
-
-<details open>
-<summary><strong>12) Repository Structure</strong></summary>
+Recommended folder structure:
 
 ```text
-backend/
-  main.py                                  # Sync API (token-verified)
-  populate_db.py                           # NTEP-style seeded demo data
-  cloud-backend/
-    inference-service/                     # FastAPI inference worker (Cloud Run)
-    functions/                             # Firestore -> Cloud Tasks trigger (v2)
-    deploy_workbench.sh                    # one-command backend deploy
-    report_inference_status.py             # status snapshot utility
-
-frontend/
-  app/                                     # role-based Next.js views
-  components/                              # dashboards, queues, profiles
-  lib/                                     # offline DB, sync engine, AI score normalization
-  deploy_cloud_run.sh                      # frontend deploy script
-```
-
-</details>
-
-<details open>
-<summary><strong>13) Model Training Provenance (CODA-TB + Kaggle)</strong></summary>
-
-Training artifacts and notebook history are tracked in:
-- `research/model-training-notebooks/README.md`
-- `research/model-training-notebooks/V10_FINAL_BLOCK_AND_RESULTS.md`
-
-This folder includes:
-- raw trial-and-error notebooks,
-- final V10 training summary,
-- reported fold metrics,
-- deployment artifact manifest,
-- CODA-TB/HeAR input-length limitation notes and mitigation strategy.
-
-### Reported V10 fold performance
-- Fold AUCs: `0.8364, 0.8297, 0.7926, 0.7877, 0.7427`
-- Fold pAUC@90%: `0.9681, 0.9682, 0.9815, 0.9619, 0.9480`
-- Mean AUC: `0.7978`
-- Mean pAUC@90%: `0.9655`
-
-### CODA-TB constraint acknowledged
-HeAR requires fixed 2-second windows, but CODA cough clips are variable length and frequently shorter than this requirement.  
-Our training pipeline handled this with mirror+tile padding, overlapping multi-window extraction, and participant-level embedding aggregation.
-
-</details>
-
-<details open>
-<summary><strong>14) References (Program + Policy Context)</strong></summary>
-
-- WHO: Tuberculosis fact sheet and global burden updates  
-  https://www.who.int/news-room/fact-sheets/detail/tuberculosis
-
-- WHO Global TB Report 2024  
-  https://www.who.int/teams/global-tuberculosis-programme/tb-reports/global-tuberculosis-report-2024
-
-- NTEP knowledge portal  
-  https://tbcindia.mohfw.gov.in/
-
-- Ni-kshay platform (program ecosystem)  
-  https://www.nikshay.in/
-
-- National Strategic Plan for TB Elimination 2017-2025 (India)  
-  https://tbcindia.mohfw.gov.in/WriteReadData/NSP%20Draft%2020.02.2017%201.pdf
-
-- Ayushman Bharat Digital Mission (ABDM)  
-  https://abdm.gov.in/
-
-- MeitY digital data protection framework resources  
-  https://www.meity.gov.in/data-protection-framework
-
-</details>
-
----
-
-## Competition Note
-This submission is intentionally built around production constraints:
-- real model inference,
-- offline-first last-mile collection,
-- deterministic and secure cloud orchestration,
-- and India-aligned operational workflow semantics.
-
-No dummy AI summaries are used in the current pipeline.
-Action recommendations are deterministic rule-based outputs generated from model risk and clinical signals (not free-form AI text).
+docs/
+  images/
+    asha-dashboard.png
+    doctor-dashboard.png
+    lab-dashboard.png
+    admin-dashboard.png
